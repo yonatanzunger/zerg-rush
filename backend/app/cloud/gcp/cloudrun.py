@@ -7,6 +7,7 @@ from typing import Any
 from google.cloud import run_v2
 from google.api_core.exceptions import NotFound
 from google.protobuf import duration_pb2
+from google.oauth2.credentials import Credentials as OAuthCredentials
 
 from app.cloud.interfaces import (
     VMProvider,
@@ -14,6 +15,7 @@ from app.cloud.interfaces import (
     VMInstance,
     VMStatus,
     CommandResult,
+    UserCredentials,
 )
 from app.config import get_settings
 
@@ -35,13 +37,30 @@ class GCPCloudRunProvider(VMProvider):
     # Default container image for openclaw agents
     DEFAULT_AGENT_IMAGE = "gcr.io/{project}/zerg-rush-agent:latest"
 
-    def __init__(self):
+    def __init__(self, user_credentials: UserCredentials | None = None):
+        """Initialize the GCP Cloud Run provider.
+
+        Args:
+            user_credentials: Optional user OAuth credentials. If provided,
+                these will be used instead of application default credentials.
+        """
         settings = get_settings()
-        self.project_id = settings.gcp_project_id
         self.region = settings.gcp_region
 
         # Cloud Run VPC connector for internal networking
         self.vpc_connector = getattr(settings, 'gcp_vpc_connector', None)
+
+        if user_credentials:
+            # Use user OAuth credentials
+            credentials = OAuthCredentials(token=user_credentials.access_token)
+            self.project_id = user_credentials.project_id or settings.gcp_project_id
+            self.services_client = run_v2.ServicesClient(credentials=credentials)
+            self.revisions_client = run_v2.RevisionsClient(credentials=credentials)
+        else:
+            # Fall back to application default credentials (for system operations)
+            self.project_id = settings.gcp_project_id
+            self.services_client = run_v2.ServicesClient()
+            self.revisions_client = run_v2.RevisionsClient()
 
         # Default agent container image
         self.default_image = getattr(
@@ -49,10 +68,6 @@ class GCPCloudRunProvider(VMProvider):
             'agent_container_image',
             self.DEFAULT_AGENT_IMAGE.format(project=self.project_id)
         )
-
-        # Initialize Cloud Run client
-        self.services_client = run_v2.ServicesClient()
-        self.revisions_client = run_v2.RevisionsClient()
 
     def _get_parent(self) -> str:
         """Get the parent resource path."""

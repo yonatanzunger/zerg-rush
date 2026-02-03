@@ -11,8 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db.session import get_db
-from app.models import User, AuditLog
-from app.cloud.factory import get_providers
+from app.models import User, AuditLog, UserOAuthToken
+from app.cloud.factory import get_providers, get_cloud_providers, CloudProviders
+from app.cloud.interfaces import UserCredentials
+from app.services import token_service, TokenNotFoundError
 
 settings = get_settings()
 security = HTTPBearer()
@@ -91,3 +93,61 @@ def get_client_ip(request: Request) -> str | None:
     if forwarded:
         return forwarded.split(",")[0].strip()
     return request.client.host if request.client else None
+
+
+async def get_user_credentials(
+    current_user: CurrentUser,
+    db: DbSession,
+) -> UserCredentials:
+    """Get user's cloud credentials from their stored OAuth token.
+
+    This retrieves and validates the user's OAuth token, refreshing it
+    if needed, and returns credentials for cloud operations.
+
+    Raises:
+        HTTPException 403: If user has no cloud credentials.
+    """
+    provider = settings.cloud_provider
+
+    try:
+        access_token = await token_service.get_valid_token(
+            db, current_user.id, provider
+        )
+    except TokenNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"No {provider} cloud credentials found. Please re-authenticate.",
+        )
+
+    # Get additional metadata from stored token
+    result = await db.execute(
+        select(UserOAuthToken).where(
+            UserOAuthToken.user_id == current_user.id,
+            UserOAuthToken.provider == provider,
+        )
+    )
+    token_record = result.scalar_one()
+
+    return UserCredentials(
+        access_token=access_token,
+        project_id=token_record.project_id,
+        subscription_id=token_record.subscription_id,
+        tenant_id=token_record.tenant_id,
+        resource_group=settings.azure_resource_group if provider == "azure" else None,
+    )
+
+
+async def get_cloud_providers_for_user(
+    user_credentials: Annotated[UserCredentials, Depends(get_user_credentials)],
+) -> CloudProviders:
+    """Get cloud providers configured with user credentials.
+
+    Use this dependency for routes that perform cloud operations
+    on behalf of the user.
+    """
+    return get_cloud_providers(user_credentials)
+
+
+# Type aliases for dependency injection
+UserCreds = Annotated[UserCredentials, Depends(get_user_credentials)]
+UserCloudProviders = Annotated[CloudProviders, Depends(get_cloud_providers_for_user)]

@@ -1,5 +1,6 @@
 """Azure Container Instances provider implementation."""
 
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -17,6 +18,7 @@ from azure.mgmt.containerinstance.models import (
     ResourceRequests,
     ResourceRequirements,
 )
+from azure.core.credentials import AccessToken
 from azure.core.exceptions import ResourceNotFoundError
 
 from app.cloud.interfaces import (
@@ -25,8 +27,20 @@ from app.cloud.interfaces import (
     VMInstance,
     VMStatus,
     CommandResult,
+    UserCredentials,
 )
 from app.config import get_settings
+
+
+class StaticTokenCredential:
+    """Simple credential wrapper for Azure SDK using a static access token."""
+
+    def __init__(self, access_token: str):
+        self._token = access_token
+
+    def get_token(self, *scopes, **kwargs) -> AccessToken:
+        # Return the token with a 1-hour expiry (token is already valid)
+        return AccessToken(self._token, int(time.time()) + 3600)
 
 
 class AzureACIProvider(VMProvider):
@@ -45,10 +59,14 @@ class AzureACIProvider(VMProvider):
     # Default container image for openclaw agents
     DEFAULT_AGENT_IMAGE = "{registry}.azurecr.io/zerg-rush-agent:latest"
 
-    def __init__(self):
+    def __init__(self, user_credentials: UserCredentials | None = None):
+        """Initialize the Azure Container Instances provider.
+
+        Args:
+            user_credentials: Optional user OAuth credentials. If provided,
+                these will be used instead of DefaultAzureCredential.
+        """
         settings = get_settings()
-        self.subscription_id = settings.azure_subscription_id
-        self.resource_group = settings.azure_resource_group
         self.location = settings.azure_location
 
         # VNet settings for network isolation
@@ -67,8 +85,17 @@ class AzureACIProvider(VMProvider):
             self.DEFAULT_AGENT_IMAGE.format(registry=self.container_registry),
         )
 
-        # Initialize Azure client
-        self.credential = DefaultAzureCredential()
+        if user_credentials:
+            # Use user OAuth credentials
+            self.credential = StaticTokenCredential(user_credentials.access_token)
+            self.subscription_id = user_credentials.subscription_id or settings.azure_subscription_id
+            self.resource_group = user_credentials.resource_group or settings.azure_resource_group
+        else:
+            # Fall back to DefaultAzureCredential (for system operations)
+            self.credential = DefaultAzureCredential()
+            self.subscription_id = settings.azure_subscription_id
+            self.resource_group = settings.azure_resource_group
+
         self.client = ContainerInstanceManagementClient(
             self.credential, self.subscription_id
         )

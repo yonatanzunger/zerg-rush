@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     debug: bool = False
     secret_key: str = "change-me-in-production"
 
+    # Token encryption key for OAuth tokens (Fernet key, generate with Fernet.generate_key())
+    # If not set, derives from secret_key (less secure, use explicit key in production)
+    token_encryption_key: str | None = None
+
     # Cloud provider: gcp, aws, azure
     cloud_provider: Literal["gcp", "aws", "azure"] = "gcp"
 

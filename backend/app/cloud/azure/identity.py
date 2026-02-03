@@ -17,7 +17,29 @@ class AzureADIdentityProvider(IdentityProvider):
 
     Supports both single-tenant and multi-tenant configurations.
     Uses the Microsoft identity platform v2.0 endpoints.
+
+    Note on Azure scopes: Azure doesn't allow mixing scopes from different
+    resources in a single token. The initial login gets Graph API scopes
+    for user verification. Cloud resource scopes are obtained via token
+    refresh when needed:
+    - https://management.azure.com/.default (ARM for VMs, resource groups)
+    - https://storage.azure.com/.default (Blob storage)
+    - https://vault.azure.net/.default (Key Vault)
     """
+
+    # Identity scopes for login - includes offline_access for refresh token
+    IDENTITY_SCOPES = [
+        "openid",
+        "email",
+        "profile",
+        "offline_access",
+        "User.Read",
+    ]
+
+    # Resource-specific scopes (obtained via refresh token when needed)
+    ARM_SCOPE = "https://management.azure.com/.default"
+    STORAGE_SCOPE = "https://storage.azure.com/.default"
+    KEYVAULT_SCOPE = "https://vault.azure.net/.default"
 
     def __init__(self):
         settings = get_settings()
@@ -38,7 +60,7 @@ class AzureADIdentityProvider(IdentityProvider):
             "client_id": self.client_id,
             "redirect_uri": redirect_uri,
             "response_type": "code",
-            "scope": "openid email profile User.Read",
+            "scope": " ".join(self.IDENTITY_SCOPES),
             "state": state,
             "response_mode": "query",
         }
@@ -55,7 +77,7 @@ class AzureADIdentityProvider(IdentityProvider):
                     "code": code,
                     "grant_type": "authorization_code",
                     "redirect_uri": redirect_uri,
-                    "scope": "openid email profile User.Read",
+                    "scope": " ".join(self.IDENTITY_SCOPES),
                 },
             )
             response.raise_for_status()
@@ -90,7 +112,21 @@ class AzureADIdentityProvider(IdentityProvider):
         )
 
     async def refresh_token(self, refresh_token: str) -> TokenResponse:
-        """Refresh an access token."""
+        """Refresh an access token using identity scopes."""
+        return await self.refresh_token_for_scope(
+            refresh_token, " ".join(self.IDENTITY_SCOPES)
+        )
+
+    async def refresh_token_for_scope(
+        self, refresh_token: str, scope: str
+    ) -> TokenResponse:
+        """Refresh an access token for a specific scope/resource.
+
+        Use this to get tokens for specific Azure resources:
+        - ARM_SCOPE for compute/resource management
+        - STORAGE_SCOPE for blob storage
+        - KEYVAULT_SCOPE for Key Vault
+        """
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 self.token_url,
@@ -99,7 +135,7 @@ class AzureADIdentityProvider(IdentityProvider):
                     "client_secret": self.client_secret,
                     "refresh_token": refresh_token,
                     "grant_type": "refresh_token",
-                    "scope": "openid email profile User.Read",
+                    "scope": scope,
                 },
             )
             response.raise_for_status()

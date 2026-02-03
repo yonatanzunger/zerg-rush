@@ -104,6 +104,23 @@ class TokenResponse:
     token_type: str = "Bearer"
 
 
+@dataclass
+class UserCredentials:
+    """User OAuth credentials for cloud operations.
+
+    These credentials are used to authenticate cloud API calls on behalf
+    of the user, rather than using application default credentials.
+    """
+
+    access_token: str
+    # GCP-specific
+    project_id: str | None = None
+    # Azure-specific
+    subscription_id: str | None = None
+    tenant_id: str | None = None
+    resource_group: str | None = None
+
+
 class VMProvider(ABC):
     """Abstract interface for VM management."""
 

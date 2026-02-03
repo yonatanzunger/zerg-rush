@@ -1,6 +1,7 @@
 """Azure Blob Storage provider implementation."""
 
 import json
+import time
 from datetime import datetime, timedelta, timezone
 
 from azure.identity import DefaultAzureCredential
@@ -12,26 +13,50 @@ from azure.storage.blob import (
     ContainerSasPermissions,
     BlobSasPermissions,
 )
+from azure.core.credentials import AccessToken
 from azure.core.exceptions import ResourceNotFoundError
 
 from app.cloud.interfaces import (
     StorageProvider,
     ScopedCredentials,
     StorageObject,
+    UserCredentials,
 )
 from app.config import get_settings
+
+
+class StaticTokenCredential:
+    """Simple credential wrapper for Azure SDK using a static access token."""
+
+    def __init__(self, access_token: str):
+        self._token = access_token
+
+    def get_token(self, *scopes, **kwargs) -> AccessToken:
+        # Return the token with a 1-hour expiry (token is already valid)
+        return AccessToken(self._token, int(time.time()) + 3600)
 
 
 class AzureBlobStorageProvider(StorageProvider):
     """Azure Blob Storage implementation of StorageProvider."""
 
-    def __init__(self):
+    def __init__(self, user_credentials: UserCredentials | None = None):
+        """Initialize the Azure Blob Storage provider.
+
+        Args:
+            user_credentials: Optional user OAuth credentials. If provided,
+                these will be used instead of DefaultAzureCredential.
+        """
         settings = get_settings()
         self.storage_account = settings.azure_storage_account
         self.account_url = f"https://{self.storage_account}.blob.core.windows.net"
 
-        # Initialize Azure client with DefaultAzureCredential
-        self.credential = DefaultAzureCredential()
+        if user_credentials:
+            # Use user OAuth credentials
+            self.credential = StaticTokenCredential(user_credentials.access_token)
+        else:
+            # Fall back to DefaultAzureCredential (for system operations)
+            self.credential = DefaultAzureCredential()
+
         self.client = BlobServiceClient(
             account_url=self.account_url,
             credential=self.credential,

@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from app.models.saved_agent import SavedAgent
     from app.models.credential import Credential
     from app.models.audit_log import AuditLog
+    from app.models.oauth_token import UserOAuthToken
 
 
 class User(Base, UUIDMixin, TimestampMixin):
@@ -41,6 +42,9 @@ class User(Base, UUIDMixin, TimestampMixin):
     )
     audit_logs: Mapped[list["AuditLog"]] = relationship(
         "AuditLog", back_populates="user"
+    )
+    oauth_tokens: Mapped[list["UserOAuthToken"]] = relationship(
+        "UserOAuthToken", back_populates="user", cascade="all, delete-orphan"
     )
 
     def __repr__(self) -> str:

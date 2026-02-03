@@ -6,11 +6,13 @@ from datetime import datetime, timedelta, timezone
 from google.cloud import storage
 from google.cloud import iam_credentials_v1
 from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials as OAuthCredentials
 
 from app.cloud.interfaces import (
     StorageProvider,
     ScopedCredentials,
     StorageObject,
+    UserCredentials,
 )
 from app.config import get_settings
 
@@ -18,11 +20,28 @@ from app.config import get_settings
 class GCPStorageProvider(StorageProvider):
     """GCP Cloud Storage implementation of StorageProvider."""
 
-    def __init__(self):
+    def __init__(self, user_credentials: UserCredentials | None = None):
+        """Initialize the GCP Storage provider.
+
+        Args:
+            user_credentials: Optional user OAuth credentials. If provided,
+                these will be used instead of application default credentials.
+        """
         settings = get_settings()
-        self.project_id = settings.gcp_project_id
-        self.client = storage.Client(project=self.project_id)
         self.location = settings.gcp_region
+
+        if user_credentials:
+            # Use user OAuth credentials
+            credentials = OAuthCredentials(token=user_credentials.access_token)
+            self.project_id = user_credentials.project_id or settings.gcp_project_id
+            self.client = storage.Client(
+                project=self.project_id,
+                credentials=credentials,
+            )
+        else:
+            # Fall back to application default credentials (for system operations)
+            self.project_id = settings.gcp_project_id
+            self.client = storage.Client(project=self.project_id)
 
     def _get_bucket_name(self, name: str, user_id: str) -> str:
         """Generate a unique bucket name."""

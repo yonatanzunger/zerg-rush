@@ -21,6 +21,16 @@ class GoogleIdentityProvider(IdentityProvider):
     TOKEN_URL = "https://oauth2.googleapis.com/token"
     USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
+    # OAuth scopes for identity and cloud operations
+    # - openid, email, profile: User identity
+    # - cloud-platform: Full access to GCP APIs (compute, storage, secrets, etc.)
+    SCOPES = [
+        "openid",
+        "email",
+        "profile",
+        "https://www.googleapis.com/auth/cloud-platform",
+    ]
+
     def __init__(self):
         settings = get_settings()
         self.client_id = settings.google_client_id
@@ -32,7 +42,7 @@ class GoogleIdentityProvider(IdentityProvider):
             "client_id": self.client_id,
             "redirect_uri": redirect_uri,
             "response_type": "code",
-            "scope": "openid email profile",
+            "scope": " ".join(self.SCOPES),
             "state": state,
             "access_type": "offline",
             "prompt": "consent",

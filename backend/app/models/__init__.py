@@ -7,6 +7,7 @@ from app.models.saved_agent import SavedAgent
 from app.models.credential import Credential
 from app.models.setup_script import SetupScript
 from app.models.audit_log import AuditLog
+from app.models.oauth_token import UserOAuthToken
 
 __all__ = [
     "Base",
@@ -17,4 +18,5 @@ __all__ = [
     "Credential",
     "SetupScript",
     "AuditLog",
+    "UserOAuthToken",
 ]

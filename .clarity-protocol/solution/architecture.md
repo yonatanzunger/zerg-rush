@@ -142,13 +142,13 @@ class IdentityProvider(ABC):
 
 ### Cloud Implementations
 
-| Interface | GCP | AWS | Azure |
-|-----------|-----|-----|-------|
-| VMProvider | Compute Engine | EC2 | Azure VMs |
-| StorageProvider | Cloud Storage | S3 | Blob Storage |
-| SecretProvider | Secret Manager | Secrets Manager | Key Vault |
-| IdentityProvider | Google Identity | Cognito | Azure AD |
-| Database | Cloud SQL (Postgres) | RDS (Postgres) | Azure Database for Postgres |
+| Interface        | GCP                  | AWS             | Azure                       |
+| ---------------- | -------------------- | --------------- | --------------------------- |
+| VMProvider       | Compute Engine       | EC2             | Azure VMs                   |
+| StorageProvider  | Cloud Storage        | S3              | Blob Storage                |
+| SecretProvider   | Secret Manager       | Secrets Manager | Key Vault                   |
+| IdentityProvider | Google Identity      | Cognito         | Azure AD                    |
+| Database         | Cloud SQL (Postgres) | RDS (Postgres)  | Azure Database for Postgres |
 
 ---
 
@@ -305,59 +305,64 @@ CREATE RULE audit_log_no_delete AS ON DELETE TO audit_logs DO INSTEAD NOTHING;
 ## API Endpoints
 
 ### Authentication
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/auth/login` | Redirect to OAuth provider |
-| GET | `/auth/callback` | OAuth callback handler |
-| POST | `/auth/logout` | Clear session |
-| GET | `/auth/me` | Get current user info |
+
+| Method | Endpoint         | Description                |
+| ------ | ---------------- | -------------------------- |
+| GET    | `/auth/login`    | Redirect to OAuth provider |
+| GET    | `/auth/callback` | OAuth callback handler     |
+| POST   | `/auth/logout`   | Clear session              |
+| GET    | `/auth/me`       | Get current user info      |
 
 ### Agents (Active)
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/agents` | List user's active agents |
-| POST | `/agents` | Create new agent |
-| GET | `/agents/{id}` | Get agent details |
-| DELETE | `/agents/{id}` | Delete agent (destroy VM) |
-| POST | `/agents/{id}/start` | Start stopped agent |
-| POST | `/agents/{id}/stop` | Stop (pause) agent |
-| POST | `/agents/{id}/archive` | Save current state as template |
-| POST | `/agents/{id}/restore` | Restore from a saved agent |
-| GET | `/agents/{id}/status` | Get real-time status |
-| GET | `/agents/{id}/files` | Browse VM filesystem |
-| GET | `/agents/{id}/files/{path}` | Download file from VM |
-| PUT | `/agents/{id}/files/{path}` | Upload file to VM |
-| POST | `/agents/{id}/chat` | Send message to agent gateway |
-| GET | `/agents/{id}/ssh` | Get SSH connection details |
+
+| Method | Endpoint                    | Description                    |
+| ------ | --------------------------- | ------------------------------ |
+| GET    | `/agents`                   | List user's active agents      |
+| POST   | `/agents`                   | Create new agent               |
+| GET    | `/agents/{id}`              | Get agent details              |
+| DELETE | `/agents/{id}`              | Delete agent (destroy VM)      |
+| POST   | `/agents/{id}/start`        | Start stopped agent            |
+| POST   | `/agents/{id}/stop`         | Stop (pause) agent             |
+| POST   | `/agents/{id}/archive`      | Save current state as template |
+| POST   | `/agents/{id}/restore`      | Restore from a saved agent     |
+| GET    | `/agents/{id}/status`       | Get real-time status           |
+| GET    | `/agents/{id}/files`        | Browse VM filesystem           |
+| GET    | `/agents/{id}/files/{path}` | Download file from VM          |
+| PUT    | `/agents/{id}/files/{path}` | Upload file to VM              |
+| POST   | `/agents/{id}/chat`         | Send message to agent gateway  |
+| GET    | `/agents/{id}/ssh`          | Get SSH connection details     |
 
 ### Saved Agents
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/saved-agents` | List all saved agents |
-| GET | `/saved-agents/starred` | List starred templates |
-| GET | `/saved-agents/{id}` | Get saved agent details |
-| PUT | `/saved-agents/{id}` | Update saved agent metadata |
-| DELETE | `/saved-agents/{id}` | Delete saved agent |
-| POST | `/saved-agents/{id}/star` | Star a saved agent |
-| DELETE | `/saved-agents/{id}/star` | Unstar a saved agent |
-| POST | `/saved-agents/{id}/copy` | Duplicate saved agent |
-| POST | `/saved-agents/{id}/deploy` | Create active agent from template |
+
+| Method | Endpoint                    | Description                       |
+| ------ | --------------------------- | --------------------------------- |
+| GET    | `/saved-agents`             | List all saved agents             |
+| GET    | `/saved-agents/starred`     | List starred templates            |
+| GET    | `/saved-agents/{id}`        | Get saved agent details           |
+| PUT    | `/saved-agents/{id}`        | Update saved agent metadata       |
+| DELETE | `/saved-agents/{id}`        | Delete saved agent                |
+| POST   | `/saved-agents/{id}/star`   | Star a saved agent                |
+| DELETE | `/saved-agents/{id}/star`   | Unstar a saved agent              |
+| POST   | `/saved-agents/{id}/copy`   | Duplicate saved agent             |
+| POST   | `/saved-agents/{id}/deploy` | Create active agent from template |
 
 ### Credentials
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/credentials` | List user's credentials |
-| POST | `/credentials` | Add new credential |
-| GET | `/credentials/{id}` | Get credential metadata |
-| DELETE | `/credentials/{id}` | Delete credential |
-| POST | `/agents/{id}/credentials/{cred_id}` | Grant credential to agent |
+
+| Method | Endpoint                             | Description                  |
+| ------ | ------------------------------------ | ---------------------------- |
+| GET    | `/credentials`                       | List user's credentials      |
+| POST   | `/credentials`                       | Add new credential           |
+| GET    | `/credentials/{id}`                  | Get credential metadata      |
+| DELETE | `/credentials/{id}`                  | Delete credential            |
+| POST   | `/agents/{id}/credentials/{cred_id}` | Grant credential to agent    |
 | DELETE | `/agents/{id}/credentials/{cred_id}` | Revoke credential from agent |
 
 ### Audit Logs
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/logs` | List user's audit logs (paginated) |
-| GET | `/logs/export` | Export logs as CSV/JSON |
+
+| Method | Endpoint       | Description                        |
+| ------ | -------------- | ---------------------------------- |
+| GET    | `/logs`        | List user's audit logs (paginated) |
+| GET    | `/logs/export` | Export logs as CSV/JSON            |
 
 ---
 
@@ -476,6 +481,60 @@ systemctl --user start openclaw-gateway
 
 ## Security Model
 
+### User OAuth Credentials for Cloud Operations
+
+Zerg Rush uses **user OAuth credentials** for all cloud operations rather than application-default credentials. This provides better security isolation and audit trails.
+
+#### OAuth Scopes
+
+**GCP:**
+
+- `openid`, `email`, `profile` - User identity
+- `https://www.googleapis.com/auth/cloud-platform` - Full GCP API access
+
+**Azure:**
+
+- `openid`, `email`, `profile`, `offline_access`, `User.Read` - User identity
+- Resource-specific tokens obtained via refresh token:
+  - `https://management.azure.com/.default` - ARM management
+  - `https://storage.azure.com/.default` - Blob storage
+  - `https://vault.azure.net/.default` - Key Vault
+
+#### Token Storage
+
+OAuth tokens are stored encrypted in the database:
+
+```
+User ────────> UserOAuthToken (encrypted with Fernet)
+                 │
+                 ├── access_token_encrypted
+                 ├── refresh_token_encrypted
+                 ├── expires_at
+                 ├── scopes
+                 ├── project_id (GCP)
+                 ├── subscription_id (Azure)
+                 └── tenant_id (Azure)
+```
+
+#### Token Refresh
+
+Tokens are automatically refreshed when:
+
+1. Access token expires within 5 minutes of a request
+2. Cloud API returns 401 Unauthorized
+
+#### Security Boundaries
+
+| Operation          | Credentials Used                |
+| ------------------ | ------------------------------- |
+| Database access    | Application Default Credentials |
+| OAuth login flow   | Application Default Credentials |
+| VM operations      | User OAuth Token                |
+| Storage operations | User OAuth Token                |
+| Secret operations  | User OAuth Token                |
+
+This ensures users can only access cloud resources they have permission for in their own GCP project or Azure subscription.
+
 ### Credential Flow
 
 ```
@@ -531,6 +590,7 @@ Agent gateways are **never exposed** to the public internet. All communication w
 ```
 
 Benefits:
+
 - Agent VMs have no public IP addresses
 - Backend validates user authorization before forwarding
 - All traffic is logged for audit purposes
@@ -616,6 +676,7 @@ zerg-rush/
 ## Development Phases
 
 ### Phase 1: Foundation (MVP)
+
 - [ ] Project scaffolding (backend + frontend)
 - [ ] Database schema and migrations
 - [ ] OAuth authentication (Google)
@@ -625,6 +686,7 @@ zerg-rush/
 - [ ] Simple dashboard UI
 
 ### Phase 2: Core Features
+
 - [ ] Credential management
 - [ ] Agent chat interface
 - [ ] File browser for agent VMs
@@ -633,6 +695,7 @@ zerg-rush/
 - [ ] Audit logging
 
 ### Phase 3: Polish
+
 - [ ] Bulk operations on saved agents
 - [ ] SSH access to agents
 - [ ] Agent status monitoring
@@ -640,11 +703,13 @@ zerg-rush/
 - [ ] Production deployment configuration
 
 ### Phase 4: Multi-Cloud
+
 - [ ] AWS provider implementation
 - [ ] Azure provider implementation
 - [ ] Provider selection in UI
 
 ### Phase 5: Advanced Features
+
 - [ ] Auto-pause idle VMs
 - [ ] Cost tracking
 - [ ] Agent metrics/analytics
@@ -657,30 +722,40 @@ zerg-rush/
 The following decisions have been made for this project:
 
 ### 1. Authentication Providers
+
 **Decision**: Support multiple OAuth providers, starting with Google.
+
 - MVP: Google OAuth only
 - Future: Add Microsoft, GitHub as additional providers
 - Users can link multiple OAuth accounts to a single Zerg Rush account
 
 ### 2. VM Size Configuration
+
 **Decision**: Users can select VM sizes, with a sensible default.
+
 - Provide a dropdown of available VM sizes per cloud provider
 - Default to a small/medium instance suitable for most agents
 - Store selected size in agent configuration
 
 ### 3. Agent Chat Networking
+
 **Decision**: Proxy all agent communication through the backend.
+
 - Agent gateways (port 18789) are **never exposed** to the public internet
 - All chat messages flow: Frontend → Backend API → Agent VM (internal network)
 - This is critical for security—compromised agents cannot be accessed externally
 - Adds some latency but provides essential isolation
 
 ### 4. Template Sharing
+
 **Decision**: Templates are private per user (for now).
+
 - MVP: Each user's templates are visible only to them
 - Future consideration: Add optional template sharing between users
 
 ### 5. Cost Awareness
+
 **Decision**: Deferred to future phases.
+
 - Not included in MVP
 - Future: Show estimated/actual costs for running agents

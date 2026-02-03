@@ -42,11 +42,11 @@ Zerg Rush is a control panel for securely managing fleets of AI agents (starting
 ### Prerequisites
 
 - Docker and Docker Compose
-- (For production) GCP account with:
-  - Compute Engine API enabled
-  - Cloud Storage API enabled
-  - Secret Manager API enabled
-  - OAuth 2.0 credentials configured
+- (For production) Cloud account with appropriate APIs enabled:
+  - **GCP**: Compute Engine, Cloud Run, Cloud Storage, Secret Manager APIs
+  - **Azure**: Container Instances, Blob Storage, Key Vault
+- OAuth 2.0 app credentials configured in your cloud provider
+- Users must have appropriate IAM/RBAC roles (see [User Cloud Requirements](#user-cloud-requirements))
 
 ### Local Development
 
@@ -157,12 +157,36 @@ zerg-rush/
 └── docker-compose.yml
 ```
 
+## User Cloud Requirements
+
+All cloud operations are performed using **your OAuth credentials**, not application-level credentials. This provides better security isolation and audit trails.
+
+### GCP Users
+
+You need these IAM roles in your GCP project:
+- `roles/compute.admin` - Manage agent VMs
+- `roles/run.admin` - Manage Cloud Run services
+- `roles/storage.admin` - Manage storage buckets
+- `roles/secretmanager.admin` - Manage secrets
+- `roles/iam.serviceAccountUser` - Attach service accounts
+
+### Azure Users
+
+You need these RBAC roles in your resource group:
+- `Contributor` - Create/manage resources
+- `Key Vault Secrets Officer` - Manage secrets
+- `Storage Blob Data Contributor` - Manage blob storage
+
+See [.clarity-protocol/solution/user-perspective.md](.clarity-protocol/solution/user-perspective.md) for detailed setup instructions.
+
 ## Security Model
 
 1. **Agent Isolation**: Each agent VM is in an isolated network with no access to other agents
 2. **No External Access**: Agent gateways are never exposed to the public internet
 3. **Scoped Credentials**: Agents only receive explicitly granted credentials
-4. **Audit Trail**: All actions are logged to an append-only audit log
+4. **User Credentials**: All cloud operations use OAuth credentials from user login, not application-level credentials
+5. **Token Encryption**: OAuth tokens are encrypted at rest using Fernet symmetric encryption
+6. **Audit Trail**: All actions are logged to an append-only audit log
 
 ## API Documentation
 

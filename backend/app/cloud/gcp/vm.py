@@ -6,6 +6,7 @@ from typing import Any
 
 from google.cloud import compute_v1
 from google.api_core.exceptions import NotFound
+from google.oauth2.credentials import Credentials as OAuthCredentials
 
 from app.cloud.interfaces import (
     VMProvider,
@@ -13,6 +14,7 @@ from app.cloud.interfaces import (
     VMInstance,
     VMStatus,
     CommandResult,
+    UserCredentials,
 )
 from app.config import get_settings
 
@@ -20,16 +22,29 @@ from app.config import get_settings
 class GCPVMProvider(VMProvider):
     """GCP Compute Engine implementation of VMProvider."""
 
-    def __init__(self):
+    def __init__(self, user_credentials: UserCredentials | None = None):
+        """Initialize the GCP Compute Engine provider.
+
+        Args:
+            user_credentials: Optional user OAuth credentials. If provided,
+                these will be used instead of application default credentials.
+        """
         settings = get_settings()
-        self.project_id = settings.gcp_project_id
         self.zone = settings.gcp_zone
         self.network = settings.gcp_agent_network
         self.subnet = settings.gcp_agent_subnet
 
-        # Initialize clients
-        self.instances_client = compute_v1.InstancesClient()
-        self.operations_client = compute_v1.ZoneOperationsClient()
+        if user_credentials:
+            # Use user OAuth credentials
+            credentials = OAuthCredentials(token=user_credentials.access_token)
+            self.project_id = user_credentials.project_id or settings.gcp_project_id
+            self.instances_client = compute_v1.InstancesClient(credentials=credentials)
+            self.operations_client = compute_v1.ZoneOperationsClient(credentials=credentials)
+        else:
+            # Fall back to application default credentials (for system operations)
+            self.project_id = settings.gcp_project_id
+            self.instances_client = compute_v1.InstancesClient()
+            self.operations_client = compute_v1.ZoneOperationsClient()
 
     def _map_status(self, gcp_status: str) -> VMStatus:
         """Map GCP status to VMStatus enum."""

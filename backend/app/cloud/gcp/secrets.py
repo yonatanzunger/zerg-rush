@@ -3,10 +3,12 @@
 from datetime import datetime, timezone
 
 from google.cloud import secretmanager
+from google.oauth2.credentials import Credentials as OAuthCredentials
 
 from app.cloud.interfaces import (
     SecretProvider,
     SecretMetadata,
+    UserCredentials,
 )
 from app.config import get_settings
 
@@ -14,10 +16,26 @@ from app.config import get_settings
 class GCPSecretProvider(SecretProvider):
     """GCP Secret Manager implementation of SecretProvider."""
 
-    def __init__(self):
+    def __init__(self, user_credentials: UserCredentials | None = None):
+        """Initialize the GCP Secret Manager provider.
+
+        Args:
+            user_credentials: Optional user OAuth credentials. If provided,
+                these will be used instead of application default credentials.
+        """
         settings = get_settings()
-        self.project_id = settings.gcp_project_id
-        self.client = secretmanager.SecretManagerServiceClient()
+
+        if user_credentials:
+            # Use user OAuth credentials
+            credentials = OAuthCredentials(token=user_credentials.access_token)
+            self.project_id = user_credentials.project_id or settings.gcp_project_id
+            self.client = secretmanager.SecretManagerServiceClient(
+                credentials=credentials
+            )
+        else:
+            # Fall back to application default credentials (for system operations)
+            self.project_id = settings.gcp_project_id
+            self.client = secretmanager.SecretManagerServiceClient()
 
     def _get_secret_id(self, user_id: str, name: str) -> str:
         """Generate a unique secret ID."""

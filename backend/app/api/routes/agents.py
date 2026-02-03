@@ -10,8 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.dependencies import CurrentUser, DbSession, log_action, get_client_ip
-from app.cloud.factory import get_providers
+from app.api.dependencies import CurrentUser, DbSession, log_action, get_client_ip, UserCloudProviders
+from app.cloud.factory import get_providers, CloudProviders
 from app.cloud.interfaces import VMConfig, VMStatus
 from app.config import get_settings
 from app.models import ActiveAgent, SavedAgent, Credential, AgentCredential
@@ -142,10 +142,10 @@ async def create_agent(
     request: Request,
     current_user: CurrentUser,
     db: DbSession,
+    providers: UserCloudProviders,
     body: CreateAgentRequest,
 ) -> ActiveAgent:
     """Create a new agent."""
-    providers = get_providers()
 
     # Use default VM size if not specified
     vm_size = body.vm_size or settings.default_vm_size
@@ -294,10 +294,10 @@ async def delete_agent(
     request: Request,
     current_user: CurrentUser,
     db: DbSession,
+    providers: UserCloudProviders,
     agent_id: str,
 ) -> None:
     """Delete an agent (destroys VM and bucket)."""
-    providers = get_providers()
 
     result = await db.execute(
         select(ActiveAgent).where(
@@ -348,10 +348,10 @@ async def start_agent(
     request: Request,
     current_user: CurrentUser,
     db: DbSession,
+    providers: UserCloudProviders,
     agent_id: str,
 ) -> ActiveAgent:
     """Start a stopped agent."""
-    providers = get_providers()
 
     result = await db.execute(
         select(ActiveAgent).where(
@@ -406,10 +406,10 @@ async def stop_agent(
     request: Request,
     current_user: CurrentUser,
     db: DbSession,
+    providers: UserCloudProviders,
     agent_id: str,
 ) -> ActiveAgent:
     """Stop a running agent."""
-    providers = get_providers()
 
     result = await db.execute(
         select(ActiveAgent).where(
@@ -462,10 +462,10 @@ async def stop_agent(
 async def get_agent_status(
     current_user: CurrentUser,
     db: DbSession,
+    providers: UserCloudProviders,
     agent_id: str,
 ) -> ActiveAgent:
     """Get the current status of an agent (refreshes from cloud)."""
-    providers = get_providers()
 
     result = await db.execute(
         select(ActiveAgent).where(

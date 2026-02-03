@@ -8,8 +8,8 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from app.api.dependencies import CurrentUser, DbSession, log_action, get_client_ip
-from app.cloud.factory import get_providers
+from app.api.dependencies import CurrentUser, DbSession, log_action, get_client_ip, UserCloudProviders
+from app.cloud.factory import get_providers, CloudProviders
 from app.models import Credential
 
 router = APIRouter()
@@ -70,10 +70,10 @@ async def create_credential(
     request: Request,
     current_user: CurrentUser,
     db: DbSession,
+    providers: UserCloudProviders,
     body: CreateCredentialRequest,
 ) -> Credential:
     """Create a new credential (stores secret in keyvault)."""
-    providers = get_providers()
 
     # Store secret in keyvault
     try:
@@ -145,10 +145,10 @@ async def delete_credential(
     request: Request,
     current_user: CurrentUser,
     db: DbSession,
+    providers: UserCloudProviders,
     credential_id: str,
 ) -> None:
     """Delete a credential (removes from keyvault and database)."""
-    providers = get_providers()
 
     result = await db.execute(
         select(Credential).where(

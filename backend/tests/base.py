@@ -27,6 +27,7 @@ from app.cloud.interfaces import (
 )
 from app.models import Base, User
 from app.db.session import get_db
+from app.api.dependencies import get_cloud_providers_for_user, get_user_credentials
 
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -289,8 +290,16 @@ class AsyncTestCase(unittest.IsolatedAsyncioTestCase):
         )
 
         self.app.dependency_overrides[get_db] = override_get_db
-        self._original_providers = factory_module._providers
-        factory_module._providers = self._mock_cloud_providers
+
+        # Override the identity provider singleton (used for login flow)
+        self._original_providers = factory_module._identity_providers
+        factory_module._identity_providers = self._mock_cloud_providers
+
+        # Override the user cloud providers dependency (used for user operations)
+        async def override_get_cloud_providers_for_user():
+            return self._mock_cloud_providers
+
+        self.app.dependency_overrides[get_cloud_providers_for_user] = override_get_cloud_providers_for_user
 
         # Create clients
         self.client = AsyncClient(
@@ -330,4 +339,4 @@ class AsyncTestCase(unittest.IsolatedAsyncioTestCase):
         # Restore original providers
         if self.app:
             self.app.dependency_overrides.clear()
-        factory_module._providers = self._original_providers
+        factory_module._identity_providers = self._original_providers
