@@ -17,6 +17,7 @@ passlib[bcrypt]==1.7.4
 
 # GCP SDK
 google-cloud-compute==1.15.0
+google-cloud-run==0.10.0
 google-cloud-storage==2.14.0
 google-cloud-secret-manager==2.18.1
 google-auth==2.27.0

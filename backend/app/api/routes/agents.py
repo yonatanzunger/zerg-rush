@@ -583,11 +583,17 @@ async def chat_with_agent(
     if not agent.vm_internal_ip:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Agent has no internal IP address",
+            detail="Agent has no internal IP address or URL",
         )
 
-    # Forward request to agent gateway
-    gateway_url = f"http://{agent.vm_internal_ip}:{agent.gateway_port}/api/chat"
+    # Build gateway URL - handle both Cloud Run URLs and traditional IPs
+    # Cloud Run URLs are full URLs (https://...), while GCE uses IPs
+    if agent.vm_internal_ip.startswith("http"):
+        # Cloud Run: URL is already complete, just append the API path
+        gateway_url = f"{agent.vm_internal_ip}/api/chat"
+    else:
+        # GCE: Construct URL from IP and port
+        gateway_url = f"http://{agent.vm_internal_ip}:{agent.gateway_port}/api/chat"
 
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:

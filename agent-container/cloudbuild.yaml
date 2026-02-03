@@ -1,0 +1,30 @@
+# Cloud Build configuration for building and pushing the agent container
+
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/zerg-rush-agent:$COMMIT_SHA'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/zerg-rush-agent:latest'
+      - '.'
+
+  # Push the container image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/zerg-rush-agent:$COMMIT_SHA'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/zerg-rush-agent:latest'
+
+images:
+  - 'gcr.io/$PROJECT_ID/zerg-rush-agent:$COMMIT_SHA'
+  - 'gcr.io/$PROJECT_ID/zerg-rush-agent:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY

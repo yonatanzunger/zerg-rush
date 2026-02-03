@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     # Cloud provider: gcp, aws, azure
     cloud_provider: Literal["gcp", "aws", "azure"] = "gcp"
 
+    # Compute type: cloudrun (recommended), gce (VMs)
+    compute_type: Literal["cloudrun", "gce"] = "cloudrun"
+
     # Database
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/zergrush"
 
@@ -32,6 +35,10 @@ class Settings(BaseSettings):
     gcp_zone: str = "us-central1-a"
     gcp_agent_network: str = "agent-network"
     gcp_agent_subnet: str = "agent-subnet"
+
+    # Cloud Run specific settings
+    gcp_vpc_connector: str | None = None  # e.g., "projects/PROJECT/locations/REGION/connectors/CONNECTOR"
+    agent_container_image: str | None = None  # Custom agent container image
 
     # OAuth (Google)
     google_client_id: str | None = None

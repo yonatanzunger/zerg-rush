@@ -27,13 +27,20 @@ def get_cloud_providers() -> CloudProviders:
     if settings.cloud_provider == "gcp":
         from app.cloud.gcp import (
             GCPVMProvider,
+            GCPCloudRunProvider,
             GCPStorageProvider,
             GCPSecretProvider,
             GoogleIdentityProvider,
         )
 
+        # Choose compute provider based on compute_type setting
+        if settings.compute_type == "cloudrun":
+            compute_provider = GCPCloudRunProvider()
+        else:
+            compute_provider = GCPVMProvider()
+
         return CloudProviders(
-            vm=GCPVMProvider(),
+            vm=compute_provider,
             storage=GCPStorageProvider(),
             secret=GCPSecretProvider(),
             identity=GoogleIdentityProvider(),
