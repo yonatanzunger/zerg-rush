@@ -23,9 +23,6 @@ class Settings(BaseSettings):
     # Cloud provider: gcp, aws, azure
     cloud_provider: Literal["gcp", "aws", "azure"] = "gcp"
 
-    # Compute type: cloudrun (recommended), gce (VMs)
-    compute_type: Literal["cloudrun", "gce"] = "cloudrun"
-
     # Database
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/zergrush"
 
@@ -33,12 +30,31 @@ class Settings(BaseSettings):
     gcp_project_id: str | None = None
     gcp_region: str = "us-central1"
     gcp_zone: str = "us-central1-a"
-    gcp_agent_network: str = "agent-network"
-    gcp_agent_subnet: str = "agent-subnet"
+    gcp_compute_type: Literal["cloudrun", "gce"] = "cloudrun"  # cloudrun (containers) or gce (VMs)
+    gcp_agent_network: str = "agent-network"  # For GCE VMs
+    gcp_agent_subnet: str = "agent-subnet"  # For GCE VMs
 
     # Cloud Run specific settings
     gcp_vpc_connector: str | None = None  # e.g., "projects/PROJECT/locations/REGION/connectors/CONNECTOR"
     agent_container_image: str | None = None  # Custom agent container image
+
+    # Azure-specific settings
+    azure_subscription_id: str | None = None
+    azure_resource_group: str | None = None
+    azure_location: str = "eastus"
+    azure_compute_type: Literal["aci", "vm"] = "aci"  # aci (containers) or vm (VMs)
+    azure_storage_account: str | None = None
+    azure_keyvault_name: str | None = None
+    azure_container_registry: str | None = None
+
+    # Azure VNet settings for ACI (optional but recommended for security)
+    azure_vnet_name: str | None = None
+    azure_subnet_name: str | None = None
+
+    # OAuth (Azure AD/Entra ID)
+    azure_client_id: str | None = None
+    azure_client_secret: str | None = None
+    azure_tenant_id: str = "common"  # Use "common" for multi-tenant or specific tenant ID
 
     # OAuth (Google)
     google_client_id: str | None = None

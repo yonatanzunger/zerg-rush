@@ -33,8 +33,8 @@ def get_cloud_providers() -> CloudProviders:
             GoogleIdentityProvider,
         )
 
-        # Choose compute provider based on compute_type setting
-        if settings.compute_type == "cloudrun":
+        # Choose compute provider based on gcp_compute_type setting
+        if settings.gcp_compute_type == "cloudrun":
             compute_provider = GCPCloudRunProvider()
         else:
             compute_provider = GCPVMProvider()
@@ -48,7 +48,27 @@ def get_cloud_providers() -> CloudProviders:
     elif settings.cloud_provider == "aws":
         raise NotImplementedError("AWS provider not yet implemented")
     elif settings.cloud_provider == "azure":
-        raise NotImplementedError("Azure provider not yet implemented")
+        from app.cloud.azure import (
+            AzureACIProvider,
+            AzureBlobStorageProvider,
+            AzureKeyVaultProvider,
+            AzureADIdentityProvider,
+        )
+
+        # Choose compute provider based on azure_compute_type setting
+        if settings.azure_compute_type == "aci":
+            compute_provider = AzureACIProvider()
+        else:
+            raise NotImplementedError(
+                "Azure VM provider not yet implemented. Use azure_compute_type=aci"
+            )
+
+        return CloudProviders(
+            vm=compute_provider,
+            storage=AzureBlobStorageProvider(),
+            secret=AzureKeyVaultProvider(),
+            identity=AzureADIdentityProvider(),
+        )
     else:
         raise ValueError(f"Unknown cloud provider: {settings.cloud_provider}")
 
