@@ -218,7 +218,8 @@ class AsyncTestCase(unittest.IsolatedAsyncioTestCase):
     auth_client: AsyncClient = None
     session: AsyncSession = None
     test_user: User = None
-    _original_get_providers = None
+    _original_providers = None
+    _mock_cloud_providers = None
 
     async def asyncSetUp(self):
         """Set up test fixtures."""
@@ -279,18 +280,17 @@ class AsyncTestCase(unittest.IsolatedAsyncioTestCase):
                     await session.rollback()
                     raise
 
-        # Override cloud providers
-        def override_get_providers() -> CloudProviders:
-            return CloudProviders(
-                vm=self.mock_providers["vm"],
-                storage=self.mock_providers["storage"],
-                secret=self.mock_providers["secret"],
-                identity=self.mock_providers["identity"],
-            )
+        # Override cloud providers by setting the singleton directly
+        self._mock_cloud_providers = CloudProviders(
+            vm=self.mock_providers["vm"],
+            storage=self.mock_providers["storage"],
+            secret=self.mock_providers["secret"],
+            identity=self.mock_providers["identity"],
+        )
 
         self.app.dependency_overrides[get_db] = override_get_db
-        self._original_get_providers = factory_module.get_providers
-        factory_module.get_providers = override_get_providers
+        self._original_providers = factory_module._providers
+        factory_module._providers = self._mock_cloud_providers
 
         # Create clients
         self.client = AsyncClient(
@@ -330,5 +330,4 @@ class AsyncTestCase(unittest.IsolatedAsyncioTestCase):
         # Restore original providers
         if self.app:
             self.app.dependency_overrides.clear()
-        if self._original_get_providers:
-            factory_module.get_providers = self._original_get_providers
+        factory_module._providers = self._original_providers

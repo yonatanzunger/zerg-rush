@@ -3,8 +3,7 @@
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDMixin
@@ -21,7 +20,7 @@ class ActiveAgent(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "active_agents"
 
     user_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("users.id"), nullable=False
+        Uuid(as_uuid=False), ForeignKey("users.id"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     vm_id: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -33,7 +32,7 @@ class ActiveAgent(Base, UUIDMixin, TimestampMixin):
     platform_type: Mapped[str] = mapped_column(String(50), nullable=False)
     platform_version: Mapped[str | None] = mapped_column(String(50))
     template_id: Mapped[str | None] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("saved_agents.id")
+        Uuid(as_uuid=False), ForeignKey("saved_agents.id")
     )
     gateway_port: Mapped[int] = mapped_column(Integer, default=18789)
 
@@ -61,18 +60,18 @@ class AgentCredential(Base):
     __tablename__ = "agent_credentials"
 
     agent_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False),
+        Uuid(as_uuid=False),
         ForeignKey("active_agents.id", ondelete="CASCADE"),
         primary_key=True,
     )
     credential_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False),
+        Uuid(as_uuid=False),
         ForeignKey("credentials.id"),
         primary_key=True,
     )
     granted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        server_default="now()",
+        server_default=func.now(),
         nullable=False,
     )
 

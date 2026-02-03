@@ -2,8 +2,7 @@
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, ForeignKey, String, Text
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy import JSON, Boolean, ForeignKey, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDMixin
@@ -20,16 +19,16 @@ class SavedAgent(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "saved_agents"
 
     user_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("users.id"), nullable=False
+        Uuid(as_uuid=False), ForeignKey("users.id"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     platform_type: Mapped[str] = mapped_column(String(50), nullable=False)
     setup_script_id: Mapped[str | None] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("setup_scripts.id")
+        Uuid(as_uuid=False), ForeignKey("setup_scripts.id")
     )
-    config_snapshot: Mapped[dict | None] = mapped_column(JSONB)
+    config_snapshot: Mapped[dict | None] = mapped_column(JSON)
     is_starred: Mapped[bool] = mapped_column(Boolean, default=False)
-    source_agent_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False))
+    source_agent_id: Mapped[str | None] = mapped_column(Uuid(as_uuid=False))
     description: Mapped[str | None] = mapped_column(Text)
 
     # Relationships

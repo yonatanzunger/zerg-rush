@@ -12,6 +12,9 @@
 .PARAMETER Frontend
     Run only frontend tests.
 
+.PARAMETER TestFile
+    Run only the specified test file (e.g., "test_auth.py" or "tests/test_auth.py").
+
 .PARAMETER Coverage
     Generate coverage report for backend tests.
 
@@ -25,11 +28,16 @@
 .EXAMPLE
     .\run-tests.ps1 -Backend -Coverage
     Runs backend tests with coverage report.
+
+.EXAMPLE
+    .\run-tests.ps1 -TestFile test_auth.py
+    Runs only the test_auth.py test file.
 #>
 
 param(
     [switch]$Backend,
     [switch]$Frontend,
+    [string]$TestFile,
     [switch]$Coverage,
     [switch]$Quiet
 )
@@ -109,23 +117,40 @@ function Test-Backend {
         $pytestArgs += "--cov-report=html:coverage_html"
     }
 
+    # Always show individual test cases and errors
+    $pytestArgs += "-v"
+    $pytestArgs += "--tb=short"
+
     if ($Quiet) {
-        $pytestArgs += "-q"
+        $pytestArgs += "--no-header"
     }
-    else {
-        $pytestArgs += "-v"
+
+    # Add specific test file if provided
+    if ($TestFile) {
+        # Normalize the path - handle both "test_auth.py" and "tests/test_auth.py"
+        if ($TestFile -notlike "tests/*" -and $TestFile -notlike "tests\*") {
+            $testPath = "tests/$TestFile"
+        }
+        else {
+            $testPath = $TestFile
+        }
+        $pytestArgs += $testPath
+        Write-Status "Running specific test file: $testPath"
     }
 
     # Run tests
     Write-Status "Executing pytest..."
     Push-Location $backendDir
     try {
+        # Disable Python output buffering for real-time streaming
+        $env:PYTHONUNBUFFERED = "1"
+
         $venvPytest = Join-Path $venvDir "Scripts\pytest.exe"
         if ($pytestArgs.Count -gt 0) {
-            & $venvPytest $pytestArgs
+            & $venvPytest $pytestArgs | Out-Host
         }
         else {
-            & $venvPytest
+            & $venvPytest | Out-Host
         }
         $testResult = $LASTEXITCODE -eq 0
 
@@ -201,8 +226,15 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
 # Determine which tests to run
-$runBackend = $Backend -or (-not $Backend -and -not $Frontend)
-$runFrontend = $Frontend -or (-not $Backend -and -not $Frontend)
+# If TestFile is specified, only run backend tests
+if ($TestFile) {
+    $runBackend = $true
+    $runFrontend = $false
+}
+else {
+    $runBackend = $Backend -or (-not $Backend -and -not $Frontend)
+    $runFrontend = $Frontend -or (-not $Backend -and -not $Frontend)
+}
 
 # Run tests
 if ($runBackend) {

@@ -2,6 +2,7 @@
 
 import unittest
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 from app.models import AuditLog
 from tests.base import AsyncTestCase
@@ -28,11 +29,11 @@ class TestListAuditLogs(AsyncTestCase):
         """Test logs listing pagination."""
         for i in range(10):
             log = AuditLog(
-                id=f"log-{i}",
+                id=str(uuid4()),
                 user_id=self.test_user.id,
                 action_type="test.action",
                 target_type="test",
-                target_id=f"target-{i}",
+                target_id=str(uuid4()),
                 timestamp=datetime.now(timezone.utc),
             )
             self.session.add(log)
@@ -55,7 +56,7 @@ class TestListAuditLogs(AsyncTestCase):
         for action in ["agent.create", "agent.delete", "user.login"]:
             for i in range(2):
                 log = AuditLog(
-                    id=f"log-{action}-{i}",
+                    id=str(uuid4()),
                     user_id=self.test_user.id,
                     action_type=action,
                     timestamp=datetime.now(timezone.utc),
@@ -74,7 +75,7 @@ class TestListAuditLogs(AsyncTestCase):
         """Test filtering logs by target type."""
         for target in ["agent", "credential", "user"]:
             log = AuditLog(
-                id=f"log-target-{target}",
+                id=str(uuid4()),
                 user_id=self.test_user.id,
                 action_type="test.action",
                 target_type=target,
@@ -92,9 +93,12 @@ class TestListAuditLogs(AsyncTestCase):
     async def test_list_logs_ordered_by_timestamp_desc(self):
         """Test that logs are ordered by timestamp descending."""
         base_time = datetime.now(timezone.utc)
+        log_ids = []
         for i in range(3):
+            log_id = str(uuid4())
+            log_ids.append(log_id)
             log = AuditLog(
-                id=f"log-time-{i}",
+                id=log_id,
                 user_id=self.test_user.id,
                 action_type="test.action",
                 timestamp=base_time - timedelta(hours=i),
@@ -106,8 +110,8 @@ class TestListAuditLogs(AsyncTestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
 
-        self.assertEqual(data["logs"][0]["id"], "log-time-0")
-        self.assertEqual(data["logs"][2]["id"], "log-time-2")
+        self.assertEqual(data["logs"][0]["id"], log_ids[0])
+        self.assertEqual(data["logs"][2]["id"], log_ids[2])
 
 
 class TestExportAuditLogs(AsyncTestCase):
@@ -115,12 +119,14 @@ class TestExportAuditLogs(AsyncTestCase):
 
     async def test_export_csv(self):
         """Test exporting logs as CSV."""
+        log_id = str(uuid4())
+        target_id = str(uuid4())
         log = AuditLog(
-            id="export-csv-log",
+            id=log_id,
             user_id=self.test_user.id,
             action_type="agent.create",
             target_type="agent",
-            target_id="agent-123",
+            target_id=target_id,
             details={"name": "Test Agent"},
             ip_address="192.168.1.1",
             timestamp=datetime.now(timezone.utc),
@@ -144,17 +150,19 @@ class TestExportAuditLogs(AsyncTestCase):
         self.assertIn("Action", header)
 
         data_row = lines[1]
-        self.assertIn("export-csv-log", data_row)
+        self.assertIn(log_id, data_row)
         self.assertIn("agent.create", data_row)
 
     async def test_export_json(self):
         """Test exporting logs as JSON."""
+        log_id = str(uuid4())
+        target_id = str(uuid4())
         log = AuditLog(
-            id="export-json-log",
+            id=log_id,
             user_id=self.test_user.id,
             action_type="credential.delete",
             target_type="credential",
-            target_id="cred-456",
+            target_id=target_id,
             details={"name": "Old Key"},
             timestamp=datetime.now(timezone.utc),
         )
@@ -169,7 +177,7 @@ class TestExportAuditLogs(AsyncTestCase):
         data = response.json()
         self.assertIsInstance(data, list)
         self.assertEqual(len(data), 1)
-        self.assertEqual(data[0]["id"], "export-json-log")
+        self.assertEqual(data[0]["id"], log_id)
         self.assertEqual(data[0]["action_type"], "credential.delete")
         self.assertEqual(data[0]["details"], {"name": "Old Key"})
 
@@ -188,12 +196,14 @@ class TestAuditLogIntegrity(AsyncTestCase):
 
     async def test_logs_include_all_fields(self):
         """Test that log entries include all expected fields."""
+        log_id = str(uuid4())
+        target_id = str(uuid4())
         log = AuditLog(
-            id="full-log",
+            id=log_id,
             user_id=self.test_user.id,
             action_type="agent.start",
             target_type="agent",
-            target_id="agent-789",
+            target_id=target_id,
             details={"vm_id": "vm-123", "reason": "user request"},
             ip_address="10.0.0.1",
             timestamp=datetime.now(timezone.utc),
@@ -208,19 +218,20 @@ class TestAuditLogIntegrity(AsyncTestCase):
         self.assertEqual(len(data["logs"]), 1)
         log_entry = data["logs"][0]
 
-        self.assertEqual(log_entry["id"], "full-log")
+        self.assertEqual(log_entry["id"], log_id)
         self.assertEqual(log_entry["action_type"], "agent.start")
         self.assertEqual(log_entry["target_type"], "agent")
-        self.assertEqual(log_entry["target_id"], "agent-789")
+        self.assertEqual(log_entry["target_id"], target_id)
         self.assertEqual(log_entry["details"], {"vm_id": "vm-123", "reason": "user request"})
         self.assertEqual(log_entry["ip_address"], "10.0.0.1")
         self.assertIn("timestamp", log_entry)
 
     async def test_logs_user_isolation(self):
         """Test that users can only see their own logs."""
+        other_user_id = str(uuid4())
         log = AuditLog(
-            id="other-user-log",
-            user_id="other-user-id",
+            id=str(uuid4()),
+            user_id=other_user_id,
             action_type="secret.action",
             timestamp=datetime.now(timezone.utc),
         )

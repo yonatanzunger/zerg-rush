@@ -1,6 +1,7 @@
 """Tests for credentials management routes."""
 
 import unittest
+from uuid import uuid4
 
 from sqlalchemy import select
 
@@ -28,7 +29,7 @@ class TestListCredentials(AsyncTestCase):
         """Test filtering credentials by type."""
         for cred_type in ["llm", "cloud", "utility"]:
             credential = Credential(
-                id=f"cred-{cred_type}",
+                id=str(uuid4()),
                 user_id=self.test_user.id,
                 name=f"{cred_type.upper()} Key",
                 type=cred_type,
@@ -126,8 +127,9 @@ class TestGetCredential(AsyncTestCase):
 
     async def test_get_credential_success(self):
         """Test successful credential retrieval."""
+        cred_id = str(uuid4())
         credential = Credential(
-            id="test-cred-123",
+            id=cred_id,
             user_id=self.test_user.id,
             name="Test Key",
             type="cloud",
@@ -137,11 +139,11 @@ class TestGetCredential(AsyncTestCase):
         self.session.add(credential)
         await self.session.commit()
 
-        response = await self.auth_client.get("/credentials/test-cred-123")
+        response = await self.auth_client.get(f"/credentials/{cred_id}")
         self.assertEqual(response.status_code, 200)
 
         data = response.json()
-        self.assertEqual(data["id"], "test-cred-123")
+        self.assertEqual(data["id"], cred_id)
         self.assertEqual(data["name"], "Test Key")
         self.assertEqual(data["type"], "cloud")
         self.assertEqual(data["description"], "A test key")
@@ -149,9 +151,11 @@ class TestGetCredential(AsyncTestCase):
 
     async def test_get_credential_other_user(self):
         """Test that users cannot access other users' credentials."""
+        cred_id = str(uuid4())
+        other_user_id = str(uuid4())
         credential = Credential(
-            id="other-cred-123",
-            user_id="other-user-id",
+            id=cred_id,
+            user_id=other_user_id,
             name="Other Key",
             type="llm",
             secret_ref="other-secret",
@@ -159,7 +163,7 @@ class TestGetCredential(AsyncTestCase):
         self.session.add(credential)
         await self.session.commit()
 
-        response = await self.auth_client.get("/credentials/other-cred-123")
+        response = await self.auth_client.get(f"/credentials/{cred_id}")
         self.assertEqual(response.status_code, 404)
 
 
@@ -184,8 +188,9 @@ class TestDeleteCredential(AsyncTestCase):
             value="secret-value",
         )
 
+        cred_id = str(uuid4())
         credential = Credential(
-            id="delete-cred-test",
+            id=cred_id,
             user_id=self.test_user.id,
             name="Delete Me",
             type="utility",
@@ -194,11 +199,11 @@ class TestDeleteCredential(AsyncTestCase):
         self.session.add(credential)
         await self.session.commit()
 
-        response = await self.auth_client.delete("/credentials/delete-cred-test")
+        response = await self.auth_client.delete(f"/credentials/{cred_id}")
         self.assertEqual(response.status_code, 204)
 
         result = await self.session.execute(
-            select(Credential).where(Credential.id == "delete-cred-test")
+            select(Credential).where(Credential.id == cred_id)
         )
         self.assertIsNone(result.scalar_one_or_none())
 

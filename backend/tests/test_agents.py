@@ -2,12 +2,18 @@
 
 import unittest
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from sqlalchemy import select
 
 from app.cloud.interfaces import VMInstance, VMStatus
 from app.models import ActiveAgent
 from tests.base import AsyncTestCase
+
+
+def make_uuid(suffix: int) -> str:
+    """Create a valid UUID string with a predictable suffix for testing."""
+    return f"00000000-0000-0000-0000-{suffix:012d}"
 
 
 class TestListAgents(AsyncTestCase):
@@ -30,7 +36,7 @@ class TestListAgents(AsyncTestCase):
         """Test agent listing pagination."""
         for i in range(5):
             agent = ActiveAgent(
-                id=f"agent-{i}",
+                id=make_uuid(i),
                 user_id=self.test_user.id,
                 name=f"Agent {i}",
                 vm_id=f"vm-{i}",
@@ -118,8 +124,9 @@ class TestGetAgent(AsyncTestCase):
 
     async def test_get_agent_success(self):
         """Test successful agent retrieval."""
+        agent_id = make_uuid(100)
         agent = ActiveAgent(
-            id="test-agent-123",
+            id=agent_id,
             user_id=self.test_user.id,
             name="Test Agent",
             vm_id="vm-123",
@@ -131,18 +138,20 @@ class TestGetAgent(AsyncTestCase):
         self.session.add(agent)
         await self.session.commit()
 
-        response = await self.auth_client.get("/agents/test-agent-123")
+        response = await self.auth_client.get(f"/agents/{agent_id}")
         self.assertEqual(response.status_code, 200)
 
         data = response.json()
-        self.assertEqual(data["id"], "test-agent-123")
+        self.assertEqual(data["id"], agent_id)
         self.assertEqual(data["name"], "Test Agent")
 
     async def test_get_agent_other_user(self):
         """Test that users cannot access other users' agents."""
+        agent_id = make_uuid(101)
+        other_user_id = make_uuid(999)
         agent = ActiveAgent(
-            id="other-agent-123",
-            user_id="other-user-id",
+            id=agent_id,
+            user_id=other_user_id,
             name="Other Agent",
             vm_id="vm-other",
             vm_size="e2-small",
@@ -153,7 +162,7 @@ class TestGetAgent(AsyncTestCase):
         self.session.add(agent)
         await self.session.commit()
 
-        response = await self.auth_client.get("/agents/other-agent-123")
+        response = await self.auth_client.get(f"/agents/{agent_id}")
         self.assertEqual(response.status_code, 404)
 
 
@@ -172,8 +181,9 @@ class TestDeleteAgent(AsyncTestCase):
 
     async def test_delete_agent_success(self):
         """Test successful agent deletion."""
+        agent_id = make_uuid(200)
         agent = ActiveAgent(
-            id="delete-test-agent",
+            id=agent_id,
             user_id=self.test_user.id,
             name="Delete Me",
             vm_id="vm-delete",
@@ -185,11 +195,11 @@ class TestDeleteAgent(AsyncTestCase):
         self.session.add(agent)
         await self.session.commit()
 
-        response = await self.auth_client.delete("/agents/delete-test-agent")
+        response = await self.auth_client.delete(f"/agents/{agent_id}")
         self.assertEqual(response.status_code, 204)
 
         result = await self.session.execute(
-            select(ActiveAgent).where(ActiveAgent.id == "delete-test-agent")
+            select(ActiveAgent).where(ActiveAgent.id == agent_id)
         )
         self.assertIsNone(result.scalar_one_or_none())
 
@@ -209,8 +219,9 @@ class TestAgentLifecycle(AsyncTestCase):
 
     async def test_start_stopped_agent(self):
         """Test starting a stopped agent."""
+        agent_id = make_uuid(300)
         agent = ActiveAgent(
-            id="stopped-agent",
+            id=agent_id,
             user_id=self.test_user.id,
             name="Stopped Agent",
             vm_id="vm-stopped",
@@ -232,7 +243,7 @@ class TestAgentLifecycle(AsyncTestCase):
             zone="us-central1-a",
         )
 
-        response = await self.auth_client.post("/agents/stopped-agent/start")
+        response = await self.auth_client.post(f"/agents/{agent_id}/start")
         self.assertEqual(response.status_code, 200)
 
         data = response.json()
@@ -240,8 +251,9 @@ class TestAgentLifecycle(AsyncTestCase):
 
     async def test_stop_running_agent(self):
         """Test stopping a running agent."""
+        agent_id = make_uuid(301)
         agent = ActiveAgent(
-            id="running-agent",
+            id=agent_id,
             user_id=self.test_user.id,
             name="Running Agent",
             vm_id="vm-running",
@@ -263,7 +275,7 @@ class TestAgentLifecycle(AsyncTestCase):
             zone="us-central1-a",
         )
 
-        response = await self.auth_client.post("/agents/running-agent/stop")
+        response = await self.auth_client.post(f"/agents/{agent_id}/stop")
         self.assertEqual(response.status_code, 200)
 
         data = response.json()
@@ -271,8 +283,9 @@ class TestAgentLifecycle(AsyncTestCase):
 
     async def test_start_already_running_agent(self):
         """Test that starting an already running agent fails."""
+        agent_id = make_uuid(302)
         agent = ActiveAgent(
-            id="already-running",
+            id=agent_id,
             user_id=self.test_user.id,
             name="Running",
             vm_id="vm-already",
@@ -284,7 +297,7 @@ class TestAgentLifecycle(AsyncTestCase):
         self.session.add(agent)
         await self.session.commit()
 
-        response = await self.auth_client.post("/agents/already-running/start")
+        response = await self.auth_client.post(f"/agents/{agent_id}/start")
         self.assertEqual(response.status_code, 400)
 
 
@@ -293,8 +306,9 @@ class TestAgentStatus(AsyncTestCase):
 
     async def test_get_status_refreshes_from_cloud(self):
         """Test that status endpoint refreshes from cloud provider."""
+        agent_id = make_uuid(400)
         agent = ActiveAgent(
-            id="status-agent",
+            id=agent_id,
             user_id=self.test_user.id,
             name="Status Agent",
             vm_id="vm-status",
@@ -316,7 +330,7 @@ class TestAgentStatus(AsyncTestCase):
             zone="us-central1-a",
         )
 
-        response = await self.auth_client.get("/agents/status-agent/status")
+        response = await self.auth_client.get(f"/agents/{agent_id}/status")
         self.assertEqual(response.status_code, 200)
 
         data = response.json()
@@ -328,8 +342,9 @@ class TestArchiveAgent(AsyncTestCase):
 
     async def test_archive_agent_creates_saved_agent(self):
         """Test that archiving creates a saved agent template."""
+        agent_id = make_uuid(500)
         agent = ActiveAgent(
-            id="archive-agent",
+            id=agent_id,
             user_id=self.test_user.id,
             name="Archive Me",
             vm_id="vm-archive",
@@ -342,7 +357,7 @@ class TestArchiveAgent(AsyncTestCase):
         await self.session.commit()
 
         response = await self.auth_client.post(
-            "/agents/archive-agent/archive",
+            f"/agents/{agent_id}/archive",
             params={"name": "My Template"},
         )
         self.assertEqual(response.status_code, 201)

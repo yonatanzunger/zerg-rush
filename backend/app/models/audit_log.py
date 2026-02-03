@@ -2,8 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, Text, event
-from sqlalchemy.dialects.postgresql import INET, JSONB, UUID
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, Uuid, event, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -15,18 +14,18 @@ class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False),
+        Uuid(as_uuid=False),
         primary_key=True,
     )
-    user_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
+    user_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("users.id"), nullable=False)
     action_type: Mapped[str] = mapped_column(String(100), nullable=False)
     target_type: Mapped[str | None] = mapped_column(String(50))
-    target_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False))
-    details: Mapped[dict | None] = mapped_column(JSONB)
-    ip_address: Mapped[str | None] = mapped_column(INET)
+    target_id: Mapped[str | None] = mapped_column(Uuid(as_uuid=False))
+    details: Mapped[dict | None] = mapped_column(JSON)
+    ip_address: Mapped[str | None] = mapped_column(String(45))
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        server_default="now()",
+        server_default=func.now(),
         nullable=False,
     )
 

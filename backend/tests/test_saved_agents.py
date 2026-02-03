@@ -1,6 +1,7 @@
 """Tests for saved agents (templates) routes."""
 
 import unittest
+from uuid import uuid4
 
 from sqlalchemy import select
 
@@ -28,7 +29,7 @@ class TestListSavedAgents(AsyncTestCase):
         """Test saved agents listing pagination."""
         for i in range(5):
             saved_agent = SavedAgent(
-                id=f"saved-{i}",
+                id=str(uuid4()),
                 user_id=self.test_user.id,
                 name=f"Template {i}",
                 platform_type="openclaw",
@@ -46,7 +47,7 @@ class TestListSavedAgents(AsyncTestCase):
         """Test filtering for starred saved agents only."""
         for i in range(3):
             saved_agent = SavedAgent(
-                id=f"starred-{i}",
+                id=str(uuid4()),
                 user_id=self.test_user.id,
                 name=f"Starred {i}",
                 platform_type="openclaw",
@@ -56,7 +57,7 @@ class TestListSavedAgents(AsyncTestCase):
 
         for i in range(2):
             saved_agent = SavedAgent(
-                id=f"unstarred-{i}",
+                id=str(uuid4()),
                 user_id=self.test_user.id,
                 name=f"Unstarred {i}",
                 platform_type="openclaw",
@@ -83,8 +84,9 @@ class TestGetSavedAgent(AsyncTestCase):
 
     async def test_get_saved_agent_success(self):
         """Test successful saved agent retrieval."""
+        agent_id = str(uuid4())
         saved_agent = SavedAgent(
-            id="test-saved-123",
+            id=agent_id,
             user_id=self.test_user.id,
             name="Test Template",
             platform_type="openclaw",
@@ -93,11 +95,11 @@ class TestGetSavedAgent(AsyncTestCase):
         self.session.add(saved_agent)
         await self.session.commit()
 
-        response = await self.auth_client.get("/saved-agents/test-saved-123")
+        response = await self.auth_client.get(f"/saved-agents/{agent_id}")
         self.assertEqual(response.status_code, 200)
 
         data = response.json()
-        self.assertEqual(data["id"], "test-saved-123")
+        self.assertEqual(data["id"], agent_id)
         self.assertEqual(data["name"], "Test Template")
         self.assertEqual(data["description"], "A test template")
 
@@ -107,8 +109,9 @@ class TestUpdateSavedAgent(AsyncTestCase):
 
     async def test_update_saved_agent_name(self):
         """Test updating saved agent name."""
+        agent_id = str(uuid4())
         saved_agent = SavedAgent(
-            id="update-test",
+            id=agent_id,
             user_id=self.test_user.id,
             name="Old Name",
             platform_type="openclaw",
@@ -117,7 +120,7 @@ class TestUpdateSavedAgent(AsyncTestCase):
         await self.session.commit()
 
         response = await self.auth_client.put(
-            "/saved-agents/update-test",
+            f"/saved-agents/{agent_id}",
             json={"name": "New Name"},
         )
         self.assertEqual(response.status_code, 200)
@@ -127,8 +130,9 @@ class TestUpdateSavedAgent(AsyncTestCase):
 
     async def test_update_saved_agent_description(self):
         """Test updating saved agent description."""
+        agent_id = str(uuid4())
         saved_agent = SavedAgent(
-            id="desc-test",
+            id=agent_id,
             user_id=self.test_user.id,
             name="Template",
             platform_type="openclaw",
@@ -137,7 +141,7 @@ class TestUpdateSavedAgent(AsyncTestCase):
         await self.session.commit()
 
         response = await self.auth_client.put(
-            "/saved-agents/desc-test",
+            f"/saved-agents/{agent_id}",
             json={"description": "New description"},
         )
         self.assertEqual(response.status_code, 200)
@@ -151,8 +155,9 @@ class TestDeleteSavedAgent(AsyncTestCase):
 
     async def test_delete_saved_agent_success(self):
         """Test successful saved agent deletion."""
+        agent_id = str(uuid4())
         saved_agent = SavedAgent(
-            id="delete-test",
+            id=agent_id,
             user_id=self.test_user.id,
             name="Delete Me",
             platform_type="openclaw",
@@ -160,11 +165,11 @@ class TestDeleteSavedAgent(AsyncTestCase):
         self.session.add(saved_agent)
         await self.session.commit()
 
-        response = await self.auth_client.delete("/saved-agents/delete-test")
+        response = await self.auth_client.delete(f"/saved-agents/{agent_id}")
         self.assertEqual(response.status_code, 204)
 
         result = await self.session.execute(
-            select(SavedAgent).where(SavedAgent.id == "delete-test")
+            select(SavedAgent).where(SavedAgent.id == agent_id)
         )
         self.assertIsNone(result.scalar_one_or_none())
 
@@ -174,8 +179,9 @@ class TestStarSavedAgent(AsyncTestCase):
 
     async def test_star_saved_agent(self):
         """Test starring a saved agent."""
+        agent_id = str(uuid4())
         saved_agent = SavedAgent(
-            id="star-test",
+            id=agent_id,
             user_id=self.test_user.id,
             name="Star Me",
             platform_type="openclaw",
@@ -184,7 +190,7 @@ class TestStarSavedAgent(AsyncTestCase):
         self.session.add(saved_agent)
         await self.session.commit()
 
-        response = await self.auth_client.post("/saved-agents/star-test/star")
+        response = await self.auth_client.post(f"/saved-agents/{agent_id}/star")
         self.assertEqual(response.status_code, 200)
 
         data = response.json()
@@ -192,8 +198,9 @@ class TestStarSavedAgent(AsyncTestCase):
 
     async def test_unstar_saved_agent(self):
         """Test unstarring a saved agent."""
+        agent_id = str(uuid4())
         saved_agent = SavedAgent(
-            id="unstar-test",
+            id=agent_id,
             user_id=self.test_user.id,
             name="Unstar Me",
             platform_type="openclaw",
@@ -202,7 +209,7 @@ class TestStarSavedAgent(AsyncTestCase):
         self.session.add(saved_agent)
         await self.session.commit()
 
-        response = await self.auth_client.delete("/saved-agents/unstar-test/star")
+        response = await self.auth_client.delete(f"/saved-agents/{agent_id}/star")
         self.assertEqual(response.status_code, 200)
 
         data = response.json()
@@ -214,8 +221,9 @@ class TestCopySavedAgent(AsyncTestCase):
 
     async def test_copy_saved_agent_default_name(self):
         """Test copying a saved agent with default name."""
+        agent_id = str(uuid4())
         saved_agent = SavedAgent(
-            id="copy-source",
+            id=agent_id,
             user_id=self.test_user.id,
             name="Original",
             platform_type="openclaw",
@@ -225,7 +233,7 @@ class TestCopySavedAgent(AsyncTestCase):
         self.session.add(saved_agent)
         await self.session.commit()
 
-        response = await self.auth_client.post("/saved-agents/copy-source/copy")
+        response = await self.auth_client.post(f"/saved-agents/{agent_id}/copy")
         self.assertEqual(response.status_code, 200)
 
         data = response.json()
@@ -237,8 +245,9 @@ class TestCopySavedAgent(AsyncTestCase):
 
     async def test_copy_saved_agent_custom_name(self):
         """Test copying a saved agent with custom name."""
+        agent_id = str(uuid4())
         saved_agent = SavedAgent(
-            id="copy-custom",
+            id=agent_id,
             user_id=self.test_user.id,
             name="Source",
             platform_type="openclaw",
@@ -247,7 +256,7 @@ class TestCopySavedAgent(AsyncTestCase):
         await self.session.commit()
 
         response = await self.auth_client.post(
-            "/saved-agents/copy-custom/copy",
+            f"/saved-agents/{agent_id}/copy",
             params={"name": "My Custom Copy"},
         )
         self.assertEqual(response.status_code, 200)
