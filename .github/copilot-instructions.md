@@ -24,6 +24,7 @@ See `.clarity-protocol/solution/architecture.md` for detailed information about 
 - Run Python tests to ensure backend functionality, and Playwright tests to ensure e2e and frontend functionality
 - Review the existing tests to ensure we're not duplicating efforts
 - Test code should be of the same quality as the rest of the project, and follow DRY principles
+- Python tests should run using `pytest` framework and use the `unittest` library and its built-in assertions for structuring tests
 - For frontend changes, run builds in the client directory to verify build success and the end-to-end tests, to ensure everything works correctly
 - When making API changes, update and run the corresponding tests to ensure everything works correctly
 
