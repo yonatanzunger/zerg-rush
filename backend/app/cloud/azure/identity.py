@@ -10,6 +10,7 @@ from app.cloud.interfaces import (
     TokenResponse,
 )
 from app.config import get_settings
+from app.tracing import Session
 
 
 class AzureADIdentityProvider(IdentityProvider):
@@ -54,7 +55,9 @@ class AzureADIdentityProvider(IdentityProvider):
         self.token_url = f"{self.authority}/oauth2/v2.0/token"
         self.graph_url = "https://graph.microsoft.com/v1.0/me"
 
-    def get_auth_url(self, redirect_uri: str, state: str) -> str:
+    def get_auth_url(
+        self, redirect_uri: str, state: str, session: Session | None = None
+    ) -> str:
         """Get the Azure AD OAuth authorization URL."""
         params = {
             "client_id": self.client_id,
@@ -66,59 +69,95 @@ class AzureADIdentityProvider(IdentityProvider):
         }
         return f"{self.authorize_url}?{urlencode(params)}"
 
-    async def exchange_code(self, code: str, redirect_uri: str) -> TokenResponse:
+    async def exchange_code(
+        self, code: str, redirect_uri: str, session: Session | None = None
+    ) -> TokenResponse:
         """Exchange authorization code for tokens."""
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self.token_url,
-                data={
-                    "client_id": self.client_id,
-                    "client_secret": self.client_secret,
-                    "code": code,
-                    "grant_type": "authorization_code",
-                    "redirect_uri": redirect_uri,
-                    "scope": " ".join(self.IDENTITY_SCOPES),
-                },
+        if session:
+            session.log("Exchanging authorization code for tokens")
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    self.token_url,
+                    data={
+                        "client_id": self.client_id,
+                        "client_secret": self.client_secret,
+                        "code": code,
+                        "grant_type": "authorization_code",
+                        "redirect_uri": redirect_uri,
+                        "scope": " ".join(self.IDENTITY_SCOPES),
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+
+            if session:
+                session.log("Token exchange successful")
+
+            return TokenResponse(
+                access_token=data["access_token"],
+                refresh_token=data.get("refresh_token"),
+                expires_in=data["expires_in"],
+                token_type=data.get("token_type", "Bearer"),
             )
-            response.raise_for_status()
-            data = response.json()
+        except Exception as e:
+            if session:
+                session.log(
+                    "Token exchange failed",
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise
 
-        return TokenResponse(
-            access_token=data["access_token"],
-            refresh_token=data.get("refresh_token"),
-            expires_in=data["expires_in"],
-            token_type=data.get("token_type", "Bearer"),
-        )
-
-    async def verify_token(self, token: str) -> UserInfo:
+    async def verify_token(
+        self, token: str, session: Session | None = None
+    ) -> UserInfo:
         """Verify an access token and return user info.
 
         Uses Microsoft Graph API to get user information.
         """
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                self.graph_url,
-                headers={"Authorization": f"Bearer {token}"},
+        if session:
+            session.log("Verifying token via Microsoft Graph API")
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    self.graph_url,
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                response.raise_for_status()
+                data = response.json()
+
+            if session:
+                session.log("Token verified successfully")
+
+            # Microsoft Graph returns different field names
+            return UserInfo(
+                subject=data["id"],  # Azure AD object ID
+                email=data.get("mail") or data.get("userPrincipalName", ""),
+                name=data.get("displayName", data.get("userPrincipalName", "")),
+                picture=None,  # Graph API requires separate call for photo
             )
-            response.raise_for_status()
-            data = response.json()
+        except Exception as e:
+            if session:
+                session.log(
+                    "Token verification failed",
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise
 
-        # Microsoft Graph returns different field names
-        return UserInfo(
-            subject=data["id"],  # Azure AD object ID
-            email=data.get("mail") or data.get("userPrincipalName", ""),
-            name=data.get("displayName", data.get("userPrincipalName", "")),
-            picture=None,  # Graph API requires separate call for photo
-        )
-
-    async def refresh_token(self, refresh_token: str) -> TokenResponse:
+    async def refresh_token(
+        self, refresh_token: str, session: Session | None = None
+    ) -> TokenResponse:
         """Refresh an access token using identity scopes."""
         return await self.refresh_token_for_scope(
-            refresh_token, " ".join(self.IDENTITY_SCOPES)
+            refresh_token, " ".join(self.IDENTITY_SCOPES), session=session
         )
 
     async def refresh_token_for_scope(
-        self, refresh_token: str, scope: str
+        self, refresh_token: str, scope: str, session: Session | None = None
     ) -> TokenResponse:
         """Refresh an access token for a specific scope/resource.
 
@@ -127,23 +166,39 @@ class AzureADIdentityProvider(IdentityProvider):
         - STORAGE_SCOPE for blob storage
         - KEYVAULT_SCOPE for Key Vault
         """
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self.token_url,
-                data={
-                    "client_id": self.client_id,
-                    "client_secret": self.client_secret,
-                    "refresh_token": refresh_token,
-                    "grant_type": "refresh_token",
-                    "scope": scope,
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
+        if session:
+            session.log("Refreshing token for scope", scope=scope)
 
-        return TokenResponse(
-            access_token=data["access_token"],
-            refresh_token=data.get("refresh_token", refresh_token),
-            expires_in=data["expires_in"],
-            token_type=data.get("token_type", "Bearer"),
-        )
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    self.token_url,
+                    data={
+                        "client_id": self.client_id,
+                        "client_secret": self.client_secret,
+                        "refresh_token": refresh_token,
+                        "grant_type": "refresh_token",
+                        "scope": scope,
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+
+            if session:
+                session.log("Token refreshed successfully", scope=scope)
+
+            return TokenResponse(
+                access_token=data["access_token"],
+                refresh_token=data.get("refresh_token", refresh_token),
+                expires_in=data["expires_in"],
+                token_type=data.get("token_type", "Bearer"),
+            )
+        except Exception as e:
+            if session:
+                session.log(
+                    "Token refresh failed",
+                    scope=scope,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise

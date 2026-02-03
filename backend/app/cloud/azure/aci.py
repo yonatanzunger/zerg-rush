@@ -30,6 +30,7 @@ from app.cloud.interfaces import (
     UserCredentials,
 )
 from app.config import get_settings
+from app.tracing import Session
 
 
 class StaticTokenCredential:
@@ -160,8 +161,18 @@ class AzureACIProvider(VMProvider):
             sanitized = "zr-" + sanitized
         return sanitized[:63]
 
-    async def create_vm(self, config: VMConfig) -> VMInstance:
+    async def create_vm(
+        self, config: VMConfig, session: Session | None = None
+    ) -> VMInstance:
         """Create a new Azure Container Instance for the agent."""
+        if session:
+            session.log(
+                "Creating Azure Container Instance",
+                name=config.name,
+                size=config.size,
+                agent_id=config.agent_id,
+            )
+
         cpu, memory_gb = self._size_to_resources(config.size)
         container_group_name = self._sanitize_name(config.name)
 
@@ -231,47 +242,107 @@ class AzureACIProvider(VMProvider):
             container_group.ip_address = None
 
         # Create the container group
-        poller = self.client.container_groups.begin_create_or_update(
-            self.resource_group,
-            container_group_name,
-            container_group,
-        )
+        try:
+            poller = self.client.container_groups.begin_create_or_update(
+                self.resource_group,
+                container_group_name,
+                container_group,
+            )
 
-        # Wait for creation to complete
-        poller.result()
+            # Wait for creation to complete
+            poller.result()
 
-        return await self.get_vm_status(container_group_name)
+            if session:
+                session.log("Azure Container Instance created", name=container_group_name)
 
-    async def delete_vm(self, vm_id: str) -> None:
+            return await self.get_vm_status(container_group_name, session=session)
+        except Exception as e:
+            if session:
+                session.log(
+                    "Azure Container Instance creation failed",
+                    name=container_group_name,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise
+
+    async def delete_vm(self, vm_id: str, session: Session | None = None) -> None:
         """Delete an Azure Container Instance."""
+        if session:
+            session.log("Deleting Azure Container Instance", vm_id=vm_id)
+
         container_group_name = self._sanitize_name(vm_id)
 
-        poller = self.client.container_groups.begin_delete(
-            self.resource_group,
-            container_group_name,
-        )
-        poller.result()
+        try:
+            poller = self.client.container_groups.begin_delete(
+                self.resource_group,
+                container_group_name,
+            )
+            poller.result()
+            if session:
+                session.log("Azure Container Instance deleted", vm_id=vm_id)
+        except Exception as e:
+            if session:
+                session.log(
+                    "Azure Container Instance deletion failed",
+                    vm_id=vm_id,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise
 
-    async def start_vm(self, vm_id: str) -> None:
+    async def start_vm(self, vm_id: str, session: Session | None = None) -> None:
         """Start a stopped Azure Container Instance."""
+        if session:
+            session.log("Starting Azure Container Instance", vm_id=vm_id)
+
         container_group_name = self._sanitize_name(vm_id)
 
-        poller = self.client.container_groups.begin_start(
-            self.resource_group,
-            container_group_name,
-        )
-        poller.result()
+        try:
+            poller = self.client.container_groups.begin_start(
+                self.resource_group,
+                container_group_name,
+            )
+            poller.result()
+            if session:
+                session.log("Azure Container Instance started", vm_id=vm_id)
+        except Exception as e:
+            if session:
+                session.log(
+                    "Azure Container Instance start failed",
+                    vm_id=vm_id,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise
 
-    async def stop_vm(self, vm_id: str) -> None:
+    async def stop_vm(self, vm_id: str, session: Session | None = None) -> None:
         """Stop a running Azure Container Instance."""
+        if session:
+            session.log("Stopping Azure Container Instance", vm_id=vm_id)
+
         container_group_name = self._sanitize_name(vm_id)
 
-        self.client.container_groups.stop(
-            self.resource_group,
-            container_group_name,
-        )
+        try:
+            self.client.container_groups.stop(
+                self.resource_group,
+                container_group_name,
+            )
+            if session:
+                session.log("Azure Container Instance stopped", vm_id=vm_id)
+        except Exception as e:
+            if session:
+                session.log(
+                    "Azure Container Instance stop failed",
+                    vm_id=vm_id,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise
 
-    async def get_vm_status(self, vm_id: str) -> VMInstance:
+    async def get_vm_status(
+        self, vm_id: str, session: Session | None = None
+    ) -> VMInstance:
         """Get current status of an Azure Container Instance."""
         container_group_name = self._sanitize_name(vm_id)
 
@@ -331,7 +402,11 @@ class AzureACIProvider(VMProvider):
         )
 
     async def run_command(
-        self, vm_id: str, command: str, timeout: int = 300
+        self,
+        vm_id: str,
+        command: str,
+        timeout: int = 300,
+        session: Session | None = None,
     ) -> CommandResult:
         """Run a command in an Azure Container Instance.
 
@@ -361,20 +436,28 @@ class AzureACIProvider(VMProvider):
         )
 
     async def upload_file(
-        self, vm_id: str, local_content: bytes, remote_path: str
+        self,
+        vm_id: str,
+        local_content: bytes,
+        remote_path: str,
+        session: Session | None = None,
     ) -> None:
         """Upload a file to an Azure Container Instance."""
         raise NotImplementedError(
             "ACI containers should use Azure Blob Storage for file exchange."
         )
 
-    async def download_file(self, vm_id: str, remote_path: str) -> bytes:
+    async def download_file(
+        self, vm_id: str, remote_path: str, session: Session | None = None
+    ) -> bytes:
         """Download a file from an Azure Container Instance."""
         raise NotImplementedError(
             "ACI containers should use Azure Blob Storage for file exchange."
         )
 
-    async def list_files(self, vm_id: str, path: str) -> list[dict[str, Any]]:
+    async def list_files(
+        self, vm_id: str, path: str, session: Session | None = None
+    ) -> list[dict[str, Any]]:
         """List files in an Azure Container Instance."""
         raise NotImplementedError(
             "ACI containers should use Azure Blob Storage for file exchange."

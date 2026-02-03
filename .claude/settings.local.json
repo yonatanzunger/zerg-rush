@@ -5,7 +5,8 @@
       "Bash(python -m venv:*)",
       "Bash(powershell -ExecutionPolicy Bypass -File scripts/run-tests.ps1:*)",
       "Bash(dir:*)",
-      "Bash(python -m pytest:*)"
+      "Bash(python -m pytest:*)",
+      "Bash(find:*)"
     ]
   }
 }

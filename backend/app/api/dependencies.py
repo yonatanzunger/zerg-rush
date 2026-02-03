@@ -15,6 +15,7 @@ from app.models import User, AuditLog, UserOAuthToken
 from app.cloud.factory import get_providers, get_cloud_providers, CloudProviders
 from app.cloud.interfaces import UserCredentials
 from app.services import token_service, TokenNotFoundError
+from app.tracing import EventTracer, Session
 
 settings = get_settings()
 security = HTTPBearer()
@@ -151,3 +152,22 @@ async def get_cloud_providers_for_user(
 # Type aliases for dependency injection
 UserCreds = Annotated[UserCredentials, Depends(get_user_credentials)]
 UserCloudProviders = Annotated[CloudProviders, Depends(get_cloud_providers_for_user)]
+
+
+def get_trace_session(request: Request) -> Session:
+    """Create a trace session for the current request.
+
+    The session is stored in request.state for middleware access.
+    User information should be set via session.set_user() after authentication.
+    """
+    tracer = EventTracer.get_instance()
+    session = tracer.create_session(
+        client_ip=get_client_ip(request),
+        request_path=str(request.url.path),
+        request_method=request.method,
+    )
+    request.state.trace_session = session
+    return session
+
+
+TraceSession = Annotated[Session, Depends(get_trace_session)]

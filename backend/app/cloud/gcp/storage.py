@@ -15,6 +15,7 @@ from app.cloud.interfaces import (
     UserCredentials,
 )
 from app.config import get_settings
+from app.tracing import Session
 
 
 class GCPStorageProvider(StorageProvider):
@@ -51,48 +52,87 @@ class GCPStorageProvider(StorageProvider):
         clean_name = name.lower().replace("_", "-")[:20]
         return f"{self.project_id}-zr-{clean_user_id}-{clean_name}"
 
-    async def create_bucket(self, name: str, user_id: str) -> str:
+    async def create_bucket(
+        self, name: str, user_id: str, session: Session | None = None
+    ) -> str:
         """Create a new GCS bucket."""
         bucket_name = self._get_bucket_name(name, user_id)
 
-        bucket = self.client.bucket(bucket_name)
-        bucket.storage_class = "STANDARD"
+        if session:
+            session.log("Creating GCS bucket", name=name, bucket_name=bucket_name)
 
-        # Set labels for organization
-        bucket.labels = {
-            "zerg-rush": "agent-bucket",
-            "user-id": user_id.replace("-", ""),
-        }
+        try:
+            bucket = self.client.bucket(bucket_name)
+            bucket.storage_class = "STANDARD"
 
-        # Create the bucket
-        new_bucket = self.client.create_bucket(
-            bucket,
-            location=self.location,
-        )
+            # Set labels for organization
+            bucket.labels = {
+                "zerg-rush": "agent-bucket",
+                "user-id": user_id.replace("-", ""),
+            }
 
-        # Set lifecycle rules (e.g., delete old versions after 30 days)
-        new_bucket.add_lifecycle_delete_rule(
-            age=30,
-            is_live=False,  # Only non-current versions
-        )
-        new_bucket.patch()
+            # Create the bucket
+            new_bucket = self.client.create_bucket(
+                bucket,
+                location=self.location,
+            )
 
-        return bucket_name
+            # Set lifecycle rules (e.g., delete old versions after 30 days)
+            new_bucket.add_lifecycle_delete_rule(
+                age=30,
+                is_live=False,  # Only non-current versions
+            )
+            new_bucket.patch()
 
-    async def delete_bucket(self, bucket_id: str) -> None:
+            if session:
+                session.log("GCS bucket created", bucket_name=bucket_name)
+
+            return bucket_name
+        except Exception as e:
+            if session:
+                session.log(
+                    "GCS bucket creation failed",
+                    bucket_name=bucket_name,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise
+
+    async def delete_bucket(
+        self, bucket_id: str, session: Session | None = None
+    ) -> None:
         """Delete a GCS bucket and all its contents."""
-        bucket = self.client.bucket(bucket_id)
+        if session:
+            session.log("Deleting GCS bucket", bucket_id=bucket_id)
 
-        # Delete all objects first
-        blobs = bucket.list_blobs()
-        for blob in blobs:
-            blob.delete()
+        try:
+            bucket = self.client.bucket(bucket_id)
 
-        # Delete the bucket
-        bucket.delete()
+            # Delete all objects first
+            blobs = bucket.list_blobs()
+            for blob in blobs:
+                blob.delete()
+
+            # Delete the bucket
+            bucket.delete()
+
+            if session:
+                session.log("GCS bucket deleted", bucket_id=bucket_id)
+        except Exception as e:
+            if session:
+                session.log(
+                    "GCS bucket deletion failed",
+                    bucket_id=bucket_id,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise
 
     async def create_scoped_credentials(
-        self, bucket_id: str, permissions: list[str] | None = None
+        self,
+        bucket_id: str,
+        permissions: list[str] | None = None,
+        session: Session | None = None,
     ) -> ScopedCredentials:
         """Create credentials scoped to a specific bucket.
 
@@ -135,7 +175,7 @@ class GCPStorageProvider(StorageProvider):
         )
 
     async def list_objects(
-        self, bucket_id: str, prefix: str = ""
+        self, bucket_id: str, prefix: str = "", session: Session | None = None
     ) -> list[StorageObject]:
         """List objects in a GCS bucket."""
         bucket = self.client.bucket(bucket_id)
@@ -154,26 +194,36 @@ class GCPStorageProvider(StorageProvider):
 
         return objects
 
-    async def upload_object(self, bucket_id: str, key: str, data: bytes) -> None:
+    async def upload_object(
+        self, bucket_id: str, key: str, data: bytes, session: Session | None = None
+    ) -> None:
         """Upload an object to a GCS bucket."""
         bucket = self.client.bucket(bucket_id)
         blob = bucket.blob(key)
         blob.upload_from_string(data)
 
-    async def download_object(self, bucket_id: str, key: str) -> bytes:
+    async def download_object(
+        self, bucket_id: str, key: str, session: Session | None = None
+    ) -> bytes:
         """Download an object from a GCS bucket."""
         bucket = self.client.bucket(bucket_id)
         blob = bucket.blob(key)
         return blob.download_as_bytes()
 
-    async def delete_object(self, bucket_id: str, key: str) -> None:
+    async def delete_object(
+        self, bucket_id: str, key: str, session: Session | None = None
+    ) -> None:
         """Delete an object from a GCS bucket."""
         bucket = self.client.bucket(bucket_id)
         blob = bucket.blob(key)
         blob.delete()
 
     async def get_signed_url(
-        self, bucket_id: str, key: str, expires_in: int = 3600
+        self,
+        bucket_id: str,
+        key: str,
+        expires_in: int = 3600,
+        session: Session | None = None,
     ) -> str:
         """Get a signed URL for an object."""
         bucket = self.client.bucket(bucket_id)

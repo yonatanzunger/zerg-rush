@@ -17,6 +17,7 @@ from app.cloud.interfaces import (
     UserCredentials,
 )
 from app.config import get_settings
+from app.tracing import Session
 
 
 class GCPVMProvider(VMProvider):
@@ -67,8 +68,18 @@ class GCPVMProvider(VMProvider):
             return "projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts"
         return image
 
-    async def create_vm(self, config: VMConfig) -> VMInstance:
+    async def create_vm(
+        self, config: VMConfig, session: Session | None = None
+    ) -> VMInstance:
         """Create a new GCP Compute Engine instance."""
+        if session:
+            session.log(
+                "Creating GCE VM",
+                name=config.name,
+                size=config.size,
+                agent_id=config.agent_id,
+            )
+
         # Build instance configuration
         instance = compute_v1.Instance()
         instance.name = config.name
@@ -117,65 +128,128 @@ class GCPVMProvider(VMProvider):
         request.zone = self.zone
         request.instance_resource = instance
 
-        operation = self.instances_client.insert(request=request)
+        try:
+            operation = self.instances_client.insert(request=request)
 
-        # Wait for operation to complete
-        wait_request = compute_v1.WaitZoneOperationRequest()
-        wait_request.project = self.project_id
-        wait_request.zone = self.zone
-        wait_request.operation = operation.name
-        self.operations_client.wait(request=wait_request)
+            # Wait for operation to complete
+            wait_request = compute_v1.WaitZoneOperationRequest()
+            wait_request.project = self.project_id
+            wait_request.zone = self.zone
+            wait_request.operation = operation.name
+            self.operations_client.wait(request=wait_request)
 
-        # Get the created instance
-        return await self.get_vm_status(config.name)
+            if session:
+                session.log("GCE VM created", name=config.name)
 
-    async def delete_vm(self, vm_id: str) -> None:
+            # Get the created instance
+            return await self.get_vm_status(config.name, session=session)
+        except Exception as e:
+            if session:
+                session.log(
+                    "GCE VM creation failed",
+                    name=config.name,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise
+
+    async def delete_vm(self, vm_id: str, session: Session | None = None) -> None:
         """Delete a GCP Compute Engine instance."""
-        request = compute_v1.DeleteInstanceRequest()
-        request.project = self.project_id
-        request.zone = self.zone
-        request.instance = vm_id
+        if session:
+            session.log("Deleting GCE VM", vm_id=vm_id)
 
-        operation = self.instances_client.delete(request=request)
+        try:
+            request = compute_v1.DeleteInstanceRequest()
+            request.project = self.project_id
+            request.zone = self.zone
+            request.instance = vm_id
 
-        # Wait for operation to complete
-        wait_request = compute_v1.WaitZoneOperationRequest()
-        wait_request.project = self.project_id
-        wait_request.zone = self.zone
-        wait_request.operation = operation.name
-        self.operations_client.wait(request=wait_request)
+            operation = self.instances_client.delete(request=request)
 
-    async def start_vm(self, vm_id: str) -> None:
+            # Wait for operation to complete
+            wait_request = compute_v1.WaitZoneOperationRequest()
+            wait_request.project = self.project_id
+            wait_request.zone = self.zone
+            wait_request.operation = operation.name
+            self.operations_client.wait(request=wait_request)
+
+            if session:
+                session.log("GCE VM deleted", vm_id=vm_id)
+        except Exception as e:
+            if session:
+                session.log(
+                    "GCE VM deletion failed",
+                    vm_id=vm_id,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise
+
+    async def start_vm(self, vm_id: str, session: Session | None = None) -> None:
         """Start a stopped GCP Compute Engine instance."""
-        request = compute_v1.StartInstanceRequest()
-        request.project = self.project_id
-        request.zone = self.zone
-        request.instance = vm_id
+        if session:
+            session.log("Starting GCE VM", vm_id=vm_id)
 
-        operation = self.instances_client.start(request=request)
+        try:
+            request = compute_v1.StartInstanceRequest()
+            request.project = self.project_id
+            request.zone = self.zone
+            request.instance = vm_id
 
-        wait_request = compute_v1.WaitZoneOperationRequest()
-        wait_request.project = self.project_id
-        wait_request.zone = self.zone
-        wait_request.operation = operation.name
-        self.operations_client.wait(request=wait_request)
+            operation = self.instances_client.start(request=request)
 
-    async def stop_vm(self, vm_id: str) -> None:
+            wait_request = compute_v1.WaitZoneOperationRequest()
+            wait_request.project = self.project_id
+            wait_request.zone = self.zone
+            wait_request.operation = operation.name
+            self.operations_client.wait(request=wait_request)
+
+            if session:
+                session.log("GCE VM started", vm_id=vm_id)
+        except Exception as e:
+            if session:
+                session.log(
+                    "GCE VM start failed",
+                    vm_id=vm_id,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise
+
+    async def stop_vm(self, vm_id: str, session: Session | None = None) -> None:
         """Stop a running GCP Compute Engine instance."""
-        request = compute_v1.StopInstanceRequest()
-        request.project = self.project_id
-        request.zone = self.zone
-        request.instance = vm_id
+        if session:
+            session.log("Stopping GCE VM", vm_id=vm_id)
 
-        operation = self.instances_client.stop(request=request)
+        try:
+            request = compute_v1.StopInstanceRequest()
+            request.project = self.project_id
+            request.zone = self.zone
+            request.instance = vm_id
 
-        wait_request = compute_v1.WaitZoneOperationRequest()
-        wait_request.project = self.project_id
-        wait_request.zone = self.zone
-        wait_request.operation = operation.name
-        self.operations_client.wait(request=wait_request)
+            operation = self.instances_client.stop(request=request)
 
-    async def get_vm_status(self, vm_id: str) -> VMInstance:
+            wait_request = compute_v1.WaitZoneOperationRequest()
+            wait_request.project = self.project_id
+            wait_request.zone = self.zone
+            wait_request.operation = operation.name
+            self.operations_client.wait(request=wait_request)
+
+            if session:
+                session.log("GCE VM stopped", vm_id=vm_id)
+        except Exception as e:
+            if session:
+                session.log(
+                    "GCE VM stop failed",
+                    vm_id=vm_id,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise
+
+    async def get_vm_status(
+        self, vm_id: str, session: Session | None = None
+    ) -> VMInstance:
         """Get current status of a GCP Compute Engine instance."""
         request = compute_v1.GetInstanceRequest()
         request.project = self.project_id
@@ -208,7 +282,11 @@ class GCPVMProvider(VMProvider):
         )
 
     async def run_command(
-        self, vm_id: str, command: str, timeout: int = 300
+        self,
+        vm_id: str,
+        command: str,
+        timeout: int = 300,
+        session: Session | None = None,
     ) -> CommandResult:
         """Run a command on a VM using OS Login and SSH.
 
@@ -224,7 +302,11 @@ class GCPVMProvider(VMProvider):
         )
 
     async def upload_file(
-        self, vm_id: str, local_content: bytes, remote_path: str
+        self,
+        vm_id: str,
+        local_content: bytes,
+        remote_path: str,
+        session: Session | None = None,
     ) -> None:
         """Upload a file to a VM.
 
@@ -235,7 +317,9 @@ class GCPVMProvider(VMProvider):
             "Use Cloud Storage for file exchange."
         )
 
-    async def download_file(self, vm_id: str, remote_path: str) -> bytes:
+    async def download_file(
+        self, vm_id: str, remote_path: str, session: Session | None = None
+    ) -> bytes:
         """Download a file from a VM.
 
         Note: This requires SSH access to the VM.
@@ -245,7 +329,9 @@ class GCPVMProvider(VMProvider):
             "Use Cloud Storage for file exchange."
         )
 
-    async def list_files(self, vm_id: str, path: str) -> list[dict[str, Any]]:
+    async def list_files(
+        self, vm_id: str, path: str, session: Session | None = None
+    ) -> list[dict[str, Any]]:
         """List files in a directory on a VM.
 
         Note: This requires SSH access to the VM.

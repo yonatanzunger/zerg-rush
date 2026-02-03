@@ -11,6 +11,7 @@ from app.cloud.interfaces import (
     UserCredentials,
 )
 from app.config import get_settings
+from app.tracing import Session
 
 
 class GCPSecretProvider(SecretProvider):
@@ -52,60 +53,111 @@ class GCPSecretProvider(SecretProvider):
         # Assume it's just the secret ID
         return self.project_id, secret_ref
 
-    async def store_secret(self, user_id: str, name: str, value: str) -> str:
+    async def store_secret(
+        self, user_id: str, name: str, value: str, session: Session | None = None
+    ) -> str:
         """Store a secret in GCP Secret Manager."""
         secret_id = self._get_secret_id(user_id, name)
         parent = f"projects/{self.project_id}"
 
-        # Create the secret
-        secret = {
-            "replication": {"automatic": {}},
-            "labels": {
-                "zerg-rush": "credential",
-                "user-id": user_id.replace("-", ""),
-            },
-        }
+        if session:
+            session.log("Storing secret", name=name, secret_id=secret_id)
 
         try:
-            created_secret = self.client.create_secret(
+            # Create the secret
+            secret = {
+                "replication": {"automatic": {}},
+                "labels": {
+                    "zerg-rush": "credential",
+                    "user-id": user_id.replace("-", ""),
+                },
+            }
+
+            try:
+                created_secret = self.client.create_secret(
+                    request={
+                        "parent": parent,
+                        "secret_id": secret_id,
+                        "secret": secret,
+                    }
+                )
+            except Exception as e:
+                if "ALREADY_EXISTS" in str(e):
+                    # Secret already exists, we'll add a new version
+                    created_secret = self.client.get_secret(
+                        name=f"{parent}/secrets/{secret_id}"
+                    )
+                else:
+                    raise
+
+            # Add the secret version
+            self.client.add_secret_version(
                 request={
-                    "parent": parent,
-                    "secret_id": secret_id,
-                    "secret": secret,
+                    "parent": created_secret.name,
+                    "payload": {"data": value.encode("utf-8")},
                 }
             )
+
+            if session:
+                session.log("Secret stored", secret_id=secret_id)
+
+            return created_secret.name
         except Exception as e:
-            if "ALREADY_EXISTS" in str(e):
-                # Secret already exists, we'll add a new version
-                created_secret = self.client.get_secret(
-                    name=f"{parent}/secrets/{secret_id}"
+            if session:
+                session.log(
+                    "Secret storage failed",
+                    secret_id=secret_id,
+                    error=str(e),
+                    error_type=type(e).__name__,
                 )
-            else:
-                raise
+            raise
 
-        # Add the secret version
-        self.client.add_secret_version(
-            request={
-                "parent": created_secret.name,
-                "payload": {"data": value.encode("utf-8")},
-            }
-        )
-
-        return created_secret.name
-
-    async def get_secret(self, secret_ref: str) -> str:
+    async def get_secret(
+        self, secret_ref: str, session: Session | None = None
+    ) -> str:
         """Retrieve a secret value from GCP Secret Manager."""
         # Access the latest version
         name = f"{secret_ref}/versions/latest"
 
-        response = self.client.access_secret_version(name=name)
-        return response.payload.data.decode("utf-8")
+        try:
+            response = self.client.access_secret_version(name=name)
+            if session:
+                session.log("Secret retrieved", secret_ref=secret_ref)
+            return response.payload.data.decode("utf-8")
+        except Exception as e:
+            if session:
+                session.log(
+                    "Secret retrieval failed",
+                    secret_ref=secret_ref,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise
 
-    async def delete_secret(self, secret_ref: str) -> None:
+    async def delete_secret(
+        self, secret_ref: str, session: Session | None = None
+    ) -> None:
         """Delete a secret from GCP Secret Manager."""
-        self.client.delete_secret(name=secret_ref)
+        if session:
+            session.log("Deleting secret", secret_ref=secret_ref)
 
-    async def list_secrets(self, user_id: str) -> list[SecretMetadata]:
+        try:
+            self.client.delete_secret(name=secret_ref)
+            if session:
+                session.log("Secret deleted", secret_ref=secret_ref)
+        except Exception as e:
+            if session:
+                session.log(
+                    "Secret deletion failed",
+                    secret_ref=secret_ref,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise
+
+    async def list_secrets(
+        self, user_id: str, session: Session | None = None
+    ) -> list[SecretMetadata]:
         """List all secrets for a user."""
         parent = f"projects/{self.project_id}"
 
@@ -132,7 +184,9 @@ class GCPSecretProvider(SecretProvider):
 
         return secrets
 
-    async def update_secret(self, secret_ref: str, value: str) -> None:
+    async def update_secret(
+        self, secret_ref: str, value: str, session: Session | None = None
+    ) -> None:
         """Update a secret's value by adding a new version."""
         self.client.add_secret_version(
             request={

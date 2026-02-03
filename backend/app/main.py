@@ -2,7 +2,7 @@
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import auth, agents, saved_agents, credentials, logs
@@ -37,6 +37,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def trace_session_middleware(request: Request, call_next):
+    """Finalize trace sessions after request completion."""
+    response = await call_next(request)
+    if hasattr(request.state, "trace_session"):
+        request.state.trace_session.finalize()
+    return response
+
 
 # Include routers
 app.include_router(auth.router, prefix="/auth", tags=["Authentication"])

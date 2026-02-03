@@ -6,6 +6,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
+from app.tracing import Session
+
 
 class VMStatus(str, Enum):
     """VM status enumeration."""
@@ -125,51 +127,67 @@ class VMProvider(ABC):
     """Abstract interface for VM management."""
 
     @abstractmethod
-    async def create_vm(self, config: VMConfig) -> VMInstance:
+    async def create_vm(
+        self, config: VMConfig, session: Session | None = None
+    ) -> VMInstance:
         """Create a new VM instance."""
         ...
 
     @abstractmethod
-    async def delete_vm(self, vm_id: str) -> None:
+    async def delete_vm(self, vm_id: str, session: Session | None = None) -> None:
         """Delete a VM instance."""
         ...
 
     @abstractmethod
-    async def start_vm(self, vm_id: str) -> None:
+    async def start_vm(self, vm_id: str, session: Session | None = None) -> None:
         """Start a stopped VM."""
         ...
 
     @abstractmethod
-    async def stop_vm(self, vm_id: str) -> None:
+    async def stop_vm(self, vm_id: str, session: Session | None = None) -> None:
         """Stop a running VM."""
         ...
 
     @abstractmethod
-    async def get_vm_status(self, vm_id: str) -> VMInstance:
+    async def get_vm_status(
+        self, vm_id: str, session: Session | None = None
+    ) -> VMInstance:
         """Get current status of a VM."""
         ...
 
     @abstractmethod
     async def run_command(
-        self, vm_id: str, command: str, timeout: int = 300
+        self,
+        vm_id: str,
+        command: str,
+        timeout: int = 300,
+        session: Session | None = None,
     ) -> CommandResult:
         """Run a command on a VM."""
         ...
 
     @abstractmethod
     async def upload_file(
-        self, vm_id: str, local_content: bytes, remote_path: str
+        self,
+        vm_id: str,
+        local_content: bytes,
+        remote_path: str,
+        session: Session | None = None,
     ) -> None:
         """Upload a file to a VM."""
         ...
 
     @abstractmethod
-    async def download_file(self, vm_id: str, remote_path: str) -> bytes:
+    async def download_file(
+        self, vm_id: str, remote_path: str, session: Session | None = None
+    ) -> bytes:
         """Download a file from a VM."""
         ...
 
     @abstractmethod
-    async def list_files(self, vm_id: str, path: str) -> list[dict[str, Any]]:
+    async def list_files(
+        self, vm_id: str, path: str, session: Session | None = None
+    ) -> list[dict[str, Any]]:
         """List files in a directory on a VM."""
         ...
 
@@ -178,47 +196,64 @@ class StorageProvider(ABC):
     """Abstract interface for object storage management."""
 
     @abstractmethod
-    async def create_bucket(self, name: str, user_id: str) -> str:
+    async def create_bucket(
+        self, name: str, user_id: str, session: Session | None = None
+    ) -> str:
         """Create a new storage bucket. Returns bucket ID."""
         ...
 
     @abstractmethod
-    async def delete_bucket(self, bucket_id: str) -> None:
+    async def delete_bucket(
+        self, bucket_id: str, session: Session | None = None
+    ) -> None:
         """Delete a storage bucket and all its contents."""
         ...
 
     @abstractmethod
     async def create_scoped_credentials(
-        self, bucket_id: str, permissions: list[str] | None = None
+        self,
+        bucket_id: str,
+        permissions: list[str] | None = None,
+        session: Session | None = None,
     ) -> ScopedCredentials:
         """Create credentials scoped to a specific bucket."""
         ...
 
     @abstractmethod
     async def list_objects(
-        self, bucket_id: str, prefix: str = ""
+        self, bucket_id: str, prefix: str = "", session: Session | None = None
     ) -> list[StorageObject]:
         """List objects in a bucket."""
         ...
 
     @abstractmethod
-    async def upload_object(self, bucket_id: str, key: str, data: bytes) -> None:
+    async def upload_object(
+        self, bucket_id: str, key: str, data: bytes, session: Session | None = None
+    ) -> None:
         """Upload an object to a bucket."""
         ...
 
     @abstractmethod
-    async def download_object(self, bucket_id: str, key: str) -> bytes:
+    async def download_object(
+        self, bucket_id: str, key: str, session: Session | None = None
+    ) -> bytes:
         """Download an object from a bucket."""
         ...
 
     @abstractmethod
-    async def delete_object(self, bucket_id: str, key: str) -> None:
+    async def delete_object(
+        self, bucket_id: str, key: str, session: Session | None = None
+    ) -> None:
         """Delete an object from a bucket."""
         ...
 
     @abstractmethod
     async def get_signed_url(
-        self, bucket_id: str, key: str, expires_in: int = 3600
+        self,
+        bucket_id: str,
+        key: str,
+        expires_in: int = 3600,
+        session: Session | None = None,
     ) -> str:
         """Get a signed URL for an object."""
         ...
@@ -228,27 +263,37 @@ class SecretProvider(ABC):
     """Abstract interface for secret/credential storage."""
 
     @abstractmethod
-    async def store_secret(self, user_id: str, name: str, value: str) -> str:
+    async def store_secret(
+        self, user_id: str, name: str, value: str, session: Session | None = None
+    ) -> str:
         """Store a secret. Returns secret reference ID."""
         ...
 
     @abstractmethod
-    async def get_secret(self, secret_ref: str) -> str:
+    async def get_secret(
+        self, secret_ref: str, session: Session | None = None
+    ) -> str:
         """Retrieve a secret value by reference."""
         ...
 
     @abstractmethod
-    async def delete_secret(self, secret_ref: str) -> None:
+    async def delete_secret(
+        self, secret_ref: str, session: Session | None = None
+    ) -> None:
         """Delete a secret."""
         ...
 
     @abstractmethod
-    async def list_secrets(self, user_id: str) -> list[SecretMetadata]:
+    async def list_secrets(
+        self, user_id: str, session: Session | None = None
+    ) -> list[SecretMetadata]:
         """List all secrets for a user."""
         ...
 
     @abstractmethod
-    async def update_secret(self, secret_ref: str, value: str) -> None:
+    async def update_secret(
+        self, secret_ref: str, value: str, session: Session | None = None
+    ) -> None:
         """Update a secret's value."""
         ...
 
@@ -257,23 +302,29 @@ class IdentityProvider(ABC):
     """Abstract interface for OAuth authentication."""
 
     @abstractmethod
-    def get_auth_url(self, redirect_uri: str, state: str) -> str:
+    def get_auth_url(
+        self, redirect_uri: str, state: str, session: Session | None = None
+    ) -> str:
         """Get the OAuth authorization URL."""
         ...
 
     @abstractmethod
     async def exchange_code(
-        self, code: str, redirect_uri: str
+        self, code: str, redirect_uri: str, session: Session | None = None
     ) -> TokenResponse:
         """Exchange authorization code for tokens."""
         ...
 
     @abstractmethod
-    async def verify_token(self, token: str) -> UserInfo:
+    async def verify_token(
+        self, token: str, session: Session | None = None
+    ) -> UserInfo:
         """Verify an access token and return user info."""
         ...
 
     @abstractmethod
-    async def refresh_token(self, refresh_token: str) -> TokenResponse:
+    async def refresh_token(
+        self, refresh_token: str, session: Session | None = None
+    ) -> TokenResponse:
         """Refresh an access token."""
         ...

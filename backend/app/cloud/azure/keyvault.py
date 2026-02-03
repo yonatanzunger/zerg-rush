@@ -2,7 +2,6 @@
 
 import time
 from datetime import datetime, timezone
-
 from azure.identity import DefaultAzureCredential
 from azure.keyvault.secrets import SecretClient
 from azure.core.credentials import AccessToken
@@ -14,6 +13,7 @@ from app.cloud.interfaces import (
     UserCredentials,
 )
 from app.config import get_settings
+from app.tracing import Session
 
 
 class StaticTokenCredential:
@@ -77,30 +77,65 @@ class AzureKeyVaultProvider(SecretProvider):
             return secret_ref.rstrip("/").split("/")[-1]
         return secret_ref
 
-    async def store_secret(self, user_id: str, name: str, value: str) -> str:
+    async def store_secret(
+        self, user_id: str, name: str, value: str, session: Session | None = None
+    ) -> str:
         """Store a secret in Azure Key Vault."""
         secret_name = self._get_secret_name(user_id, name)
 
-        # Set the secret with tags for organization
-        secret = self.client.set_secret(
-            secret_name,
-            value,
-            tags={
-                "zerg-rush": "credential",
-                "user-id": user_id.replace("-", ""),
-                "original-name": name[:256],  # Preserve original name
-            },
-        )
+        if session:
+            session.log("Storing secret", name=name, secret_name=secret_name)
 
-        return secret.id  # Returns full URL to the secret
+        try:
+            # Set the secret with tags for organization
+            secret = self.client.set_secret(
+                secret_name,
+                value,
+                tags={
+                    "zerg-rush": "credential",
+                    "user-id": user_id.replace("-", ""),
+                    "original-name": name[:256],  # Preserve original name
+                },
+            )
 
-    async def get_secret(self, secret_ref: str) -> str:
+            if session:
+                session.log("Secret stored", secret_name=secret_name)
+
+            return secret.id  # Returns full URL to the secret
+        except Exception as e:
+            if session:
+                session.log(
+                    "Secret storage failed",
+                    secret_name=secret_name,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise
+
+    async def get_secret(
+        self, secret_ref: str, session: Session | None = None
+    ) -> str:
         """Retrieve a secret value from Azure Key Vault."""
         secret_name = self._parse_secret_ref(secret_ref)
-        secret = self.client.get_secret(secret_name)
-        return secret.value
 
-    async def delete_secret(self, secret_ref: str) -> None:
+        try:
+            secret = self.client.get_secret(secret_name)
+            if session:
+                session.log("Secret retrieved", secret_name=secret_name)
+            return secret.value
+        except Exception as e:
+            if session:
+                session.log(
+                    "Secret retrieval failed",
+                    secret_name=secret_name,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise
+
+    async def delete_secret(
+        self, secret_ref: str, session: Session | None = None
+    ) -> None:
         """Delete a secret from Azure Key Vault.
 
         Note: Azure Key Vault uses soft-delete by default.
@@ -108,47 +143,95 @@ class AzureKeyVaultProvider(SecretProvider):
         """
         secret_name = self._parse_secret_ref(secret_ref)
 
-        # Begin deletion
-        poller = self.client.begin_delete_secret(secret_name)
-        poller.result()
+        if session:
+            session.log("Deleting secret", secret_name=secret_name)
 
-    async def list_secrets(self, user_id: str) -> list[SecretMetadata]:
-        """List all secrets for a user."""
-        secrets = []
-        user_id_clean = user_id.replace("-", "")
+        try:
+            # Begin deletion
+            poller = self.client.begin_delete_secret(secret_name)
+            poller.result()
 
-        # List all secrets and filter by user tag
-        for secret_properties in self.client.list_properties_of_secrets():
-            # Check if this secret belongs to the user
-            tags = secret_properties.tags or {}
-            if tags.get("user-id") == user_id_clean:
-                # Parse creation time
-                created_at = secret_properties.created_on or datetime.now(timezone.utc)
-
-                # Get the original name from tags or use the secret name
-                original_name = tags.get("original-name", secret_properties.name)
-
-                secrets.append(
-                    SecretMetadata(
-                        secret_id=secret_properties.id,
-                        name=original_name,
-                        created_at=created_at,
-                        version=secret_properties.version,
-                    )
+            if session:
+                session.log("Secret deleted", secret_name=secret_name)
+        except Exception as e:
+            if session:
+                session.log(
+                    "Secret deletion failed",
+                    secret_name=secret_name,
+                    error=str(e),
+                    error_type=type(e).__name__,
                 )
+            raise
 
-        return secrets
+    async def list_secrets(
+        self, user_id: str, session: Session | None = None
+    ) -> list[SecretMetadata]:
+        """List all secrets for a user."""
+        try:
+            secrets = []
+            user_id_clean = user_id.replace("-", "")
 
-    async def update_secret(self, secret_ref: str, value: str) -> None:
+            # List all secrets and filter by user tag
+            for secret_properties in self.client.list_properties_of_secrets():
+                # Check if this secret belongs to the user
+                tags = secret_properties.tags or {}
+                if tags.get("user-id") == user_id_clean:
+                    # Parse creation time
+                    created_at = secret_properties.created_on or datetime.now(timezone.utc)
+
+                    # Get the original name from tags or use the secret name
+                    original_name = tags.get("original-name", secret_properties.name)
+
+                    secrets.append(
+                        SecretMetadata(
+                            secret_id=secret_properties.id,
+                            name=original_name,
+                            created_at=created_at,
+                            version=secret_properties.version,
+                        )
+                    )
+
+            if session:
+                session.log("Secrets listed", count=len(secrets))
+
+            return secrets
+        except Exception as e:
+            if session:
+                session.log(
+                    "Secret listing failed",
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise
+
+    async def update_secret(
+        self, secret_ref: str, value: str, session: Session | None = None
+    ) -> None:
         """Update a secret's value by setting a new version."""
         secret_name = self._parse_secret_ref(secret_ref)
 
-        # Get existing secret to preserve tags
-        try:
-            existing = self.client.get_secret(secret_name)
-            tags = existing.properties.tags
-        except ResourceNotFoundError:
-            tags = {}
+        if session:
+            session.log("Updating secret", secret_name=secret_name)
 
-        # Set new value (creates new version)
-        self.client.set_secret(secret_name, value, tags=tags)
+        try:
+            # Get existing secret to preserve tags
+            try:
+                existing = self.client.get_secret(secret_name)
+                tags = existing.properties.tags
+            except ResourceNotFoundError:
+                tags = {}
+
+            # Set new value (creates new version)
+            self.client.set_secret(secret_name, value, tags=tags)
+
+            if session:
+                session.log("Secret updated", secret_name=secret_name)
+        except Exception as e:
+            if session:
+                session.log(
+                    "Secret update failed",
+                    secret_name=secret_name,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise

@@ -18,6 +18,7 @@ from app.cloud.interfaces import (
     UserCredentials,
 )
 from app.config import get_settings
+from app.tracing import Session
 
 
 class GCPCloudRunProvider(VMProvider):
@@ -126,8 +127,18 @@ class GCPCloudRunProvider(VMProvider):
         }
         return size_map.get(size, ("1", "1Gi"))
 
-    async def create_vm(self, config: VMConfig) -> VMInstance:
+    async def create_vm(
+        self, config: VMConfig, session: Session | None = None
+    ) -> VMInstance:
         """Create a new Cloud Run service for the agent."""
+        if session:
+            session.log(
+                "Creating Cloud Run service",
+                name=config.name,
+                size=config.size,
+                agent_id=config.agent_id,
+            )
+
         cpu_limit, memory_limit = self._size_to_resources(config.size)
 
         # Build environment variables
@@ -191,59 +202,122 @@ class GCPCloudRunProvider(VMProvider):
             service_id=config.name,
         )
 
-        operation = self.services_client.create_service(request=request)
+        try:
+            operation = self.services_client.create_service(request=request)
 
-        # Wait for the operation to complete
-        result = operation.result()
+            # Wait for the operation to complete
+            result = operation.result()
 
-        return await self.get_vm_status(config.name)
+            if session:
+                session.log("Cloud Run service created", name=config.name)
 
-    async def delete_vm(self, vm_id: str) -> None:
+            return await self.get_vm_status(config.name, session=session)
+        except Exception as e:
+            if session:
+                session.log(
+                    "Cloud Run service creation failed",
+                    name=config.name,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise
+
+    async def delete_vm(self, vm_id: str, session: Session | None = None) -> None:
         """Delete a Cloud Run service."""
-        request = run_v2.DeleteServiceRequest(
-            name=self._get_service_name(vm_id),
-        )
+        if session:
+            session.log("Deleting Cloud Run service", vm_id=vm_id)
 
-        operation = self.services_client.delete_service(request=request)
-        operation.result()  # Wait for deletion
+        try:
+            request = run_v2.DeleteServiceRequest(
+                name=self._get_service_name(vm_id),
+            )
 
-    async def start_vm(self, vm_id: str) -> None:
+            operation = self.services_client.delete_service(request=request)
+            operation.result()  # Wait for deletion
+
+            if session:
+                session.log("Cloud Run service deleted", vm_id=vm_id)
+        except Exception as e:
+            if session:
+                session.log(
+                    "Cloud Run service deletion failed",
+                    vm_id=vm_id,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise
+
+    async def start_vm(self, vm_id: str, session: Session | None = None) -> None:
         """Start a Cloud Run service by setting min_instances to 1.
 
         Cloud Run services are always "running" in a sense, but we can
         control whether instances are kept warm by adjusting min_instances.
         """
-        # Get current service
-        service = self.services_client.get_service(
-            name=self._get_service_name(vm_id)
-        )
+        if session:
+            session.log("Starting Cloud Run service", vm_id=vm_id)
 
-        # Update scaling to ensure at least one instance
-        service.template.scaling.min_instance_count = 1
+        try:
+            # Get current service
+            service = self.services_client.get_service(
+                name=self._get_service_name(vm_id)
+            )
 
-        request = run_v2.UpdateServiceRequest(service=service)
-        operation = self.services_client.update_service(request=request)
-        operation.result()
+            # Update scaling to ensure at least one instance
+            service.template.scaling.min_instance_count = 1
 
-    async def stop_vm(self, vm_id: str) -> None:
+            request = run_v2.UpdateServiceRequest(service=service)
+            operation = self.services_client.update_service(request=request)
+            operation.result()
+
+            if session:
+                session.log("Cloud Run service started", vm_id=vm_id)
+        except Exception as e:
+            if session:
+                session.log(
+                    "Cloud Run service start failed",
+                    vm_id=vm_id,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise
+
+    async def stop_vm(self, vm_id: str, session: Session | None = None) -> None:
         """Stop a Cloud Run service by setting min_instances to 0.
 
         This allows the service to scale to zero, effectively "stopping" it
         while keeping the configuration intact.
         """
-        # Get current service
-        service = self.services_client.get_service(
-            name=self._get_service_name(vm_id)
-        )
+        if session:
+            session.log("Stopping Cloud Run service", vm_id=vm_id)
 
-        # Update scaling to allow scale to zero
-        service.template.scaling.min_instance_count = 0
+        try:
+            # Get current service
+            service = self.services_client.get_service(
+                name=self._get_service_name(vm_id)
+            )
 
-        request = run_v2.UpdateServiceRequest(service=service)
-        operation = self.services_client.update_service(request=request)
-        operation.result()
+            # Update scaling to allow scale to zero
+            service.template.scaling.min_instance_count = 0
 
-    async def get_vm_status(self, vm_id: str) -> VMInstance:
+            request = run_v2.UpdateServiceRequest(service=service)
+            operation = self.services_client.update_service(request=request)
+            operation.result()
+
+            if session:
+                session.log("Cloud Run service stopped", vm_id=vm_id)
+        except Exception as e:
+            if session:
+                session.log(
+                    "Cloud Run service stop failed",
+                    vm_id=vm_id,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise
+
+    async def get_vm_status(
+        self, vm_id: str, session: Session | None = None
+    ) -> VMInstance:
         """Get current status of a Cloud Run service."""
         try:
             service = self.services_client.get_service(
@@ -291,7 +365,11 @@ class GCPCloudRunProvider(VMProvider):
         )
 
     async def run_command(
-        self, vm_id: str, command: str, timeout: int = 300
+        self,
+        vm_id: str,
+        command: str,
+        timeout: int = 300,
+        session: Session | None = None,
     ) -> CommandResult:
         """Run a command in a Cloud Run container.
 
@@ -305,7 +383,11 @@ class GCPCloudRunProvider(VMProvider):
         )
 
     async def upload_file(
-        self, vm_id: str, local_content: bytes, remote_path: str
+        self,
+        vm_id: str,
+        local_content: bytes,
+        remote_path: str,
+        session: Session | None = None,
     ) -> None:
         """Upload a file to a Cloud Run container.
 
@@ -317,14 +399,18 @@ class GCPCloudRunProvider(VMProvider):
             "Use Cloud Storage for file exchange."
         )
 
-    async def download_file(self, vm_id: str, remote_path: str) -> bytes:
+    async def download_file(
+        self, vm_id: str, remote_path: str, session: Session | None = None
+    ) -> bytes:
         """Download a file from a Cloud Run container."""
         raise NotImplementedError(
             "Cloud Run containers are stateless. "
             "Use Cloud Storage for file exchange."
         )
 
-    async def list_files(self, vm_id: str, path: str) -> list[dict[str, Any]]:
+    async def list_files(
+        self, vm_id: str, path: str, session: Session | None = None
+    ) -> list[dict[str, Any]]:
         """List files in a Cloud Run container."""
         raise NotImplementedError(
             "Cloud Run containers are stateless. "

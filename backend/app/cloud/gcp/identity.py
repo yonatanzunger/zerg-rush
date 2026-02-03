@@ -12,6 +12,7 @@ from app.cloud.interfaces import (
     TokenResponse,
 )
 from app.config import get_settings
+from app.tracing import Session
 
 
 class GoogleIdentityProvider(IdentityProvider):
@@ -36,7 +37,9 @@ class GoogleIdentityProvider(IdentityProvider):
         self.client_id = settings.google_client_id
         self.client_secret = settings.google_client_secret
 
-    def get_auth_url(self, redirect_uri: str, state: str) -> str:
+    def get_auth_url(
+        self, redirect_uri: str, state: str, session: Session | None = None
+    ) -> str:
         """Get the Google OAuth authorization URL."""
         params = {
             "client_id": self.client_id,
@@ -50,65 +53,114 @@ class GoogleIdentityProvider(IdentityProvider):
         return f"{self.AUTHORIZE_URL}?{urlencode(params)}"
 
     async def exchange_code(
-        self, code: str, redirect_uri: str
+        self, code: str, redirect_uri: str, session: Session | None = None
     ) -> TokenResponse:
         """Exchange authorization code for tokens."""
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self.TOKEN_URL,
-                data={
-                    "client_id": self.client_id,
-                    "client_secret": self.client_secret,
-                    "code": code,
-                    "grant_type": "authorization_code",
-                    "redirect_uri": redirect_uri,
-                },
+        if session:
+            session.log("Exchanging authorization code for tokens")
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    self.TOKEN_URL,
+                    data={
+                        "client_id": self.client_id,
+                        "client_secret": self.client_secret,
+                        "code": code,
+                        "grant_type": "authorization_code",
+                        "redirect_uri": redirect_uri,
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+
+            if session:
+                session.log("Token exchange successful")
+
+            return TokenResponse(
+                access_token=data["access_token"],
+                refresh_token=data.get("refresh_token"),
+                expires_in=data["expires_in"],
+                token_type=data.get("token_type", "Bearer"),
             )
-            response.raise_for_status()
-            data = response.json()
+        except Exception as e:
+            if session:
+                session.log(
+                    "Token exchange failed",
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise
 
-        return TokenResponse(
-            access_token=data["access_token"],
-            refresh_token=data.get("refresh_token"),
-            expires_in=data["expires_in"],
-            token_type=data.get("token_type", "Bearer"),
-        )
-
-    async def verify_token(self, token: str) -> UserInfo:
+    async def verify_token(
+        self, token: str, session: Session | None = None
+    ) -> UserInfo:
         """Verify an access token and return user info."""
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                self.USERINFO_URL,
-                headers={"Authorization": f"Bearer {token}"},
+        if session:
+            session.log("Verifying token via Google userinfo API")
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    self.USERINFO_URL,
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                response.raise_for_status()
+                data = response.json()
+
+            if session:
+                session.log("Token verified successfully")
+
+            return UserInfo(
+                subject=data["sub"],
+                email=data["email"],
+                name=data.get("name", data["email"]),
+                picture=data.get("picture"),
             )
-            response.raise_for_status()
-            data = response.json()
+        except Exception as e:
+            if session:
+                session.log(
+                    "Token verification failed",
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise
 
-        return UserInfo(
-            subject=data["sub"],
-            email=data["email"],
-            name=data.get("name", data["email"]),
-            picture=data.get("picture"),
-        )
-
-    async def refresh_token(self, refresh_token: str) -> TokenResponse:
+    async def refresh_token(
+        self, refresh_token: str, session: Session | None = None
+    ) -> TokenResponse:
         """Refresh an access token."""
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self.TOKEN_URL,
-                data={
-                    "client_id": self.client_id,
-                    "client_secret": self.client_secret,
-                    "refresh_token": refresh_token,
-                    "grant_type": "refresh_token",
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
+        if session:
+            session.log("Refreshing access token")
 
-        return TokenResponse(
-            access_token=data["access_token"],
-            refresh_token=data.get("refresh_token", refresh_token),
-            expires_in=data["expires_in"],
-            token_type=data.get("token_type", "Bearer"),
-        )
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    self.TOKEN_URL,
+                    data={
+                        "client_id": self.client_id,
+                        "client_secret": self.client_secret,
+                        "refresh_token": refresh_token,
+                        "grant_type": "refresh_token",
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()
+
+            if session:
+                session.log("Token refreshed successfully")
+
+            return TokenResponse(
+                access_token=data["access_token"],
+                refresh_token=data.get("refresh_token", refresh_token),
+                expires_in=data["expires_in"],
+                token_type=data.get("token_type", "Bearer"),
+            )
+        except Exception as e:
+            if session:
+                session.log(
+                    "Token refresh failed",
+                    error=str(e),
+                    error_type=type(e).__name__,
+                )
+            raise

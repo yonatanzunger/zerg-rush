@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.dependencies import CurrentUser, DbSession, log_action, get_client_ip, UserCloudProviders
+from app.api.dependencies import CurrentUser, DbSession, log_action, get_client_ip, UserCloudProviders, TraceSession
 from app.cloud.factory import get_providers, CloudProviders
 from app.cloud.interfaces import VMConfig, VMStatus
 from app.config import get_settings
@@ -144,8 +144,11 @@ async def create_agent(
     db: DbSession,
     providers: UserCloudProviders,
     body: CreateAgentRequest,
+    session: TraceSession,
 ) -> ActiveAgent:
     """Create a new agent."""
+    session.set_user(current_user)
+    session.log("Creating agent", name=body.name, platform_type=body.platform_type)
 
     # Use default VM size if not specified
     vm_size = body.vm_size or settings.default_vm_size
@@ -158,67 +161,75 @@ async def create_agent(
     # Validate template if specified
     template = None
     if body.template_id:
-        result = await db.execute(
-            select(SavedAgent).where(
-                SavedAgent.id == body.template_id,
-                SavedAgent.user_id == current_user.id,
+        with session.span("Validate template"):
+            result = await db.execute(
+                select(SavedAgent).where(
+                    SavedAgent.id == body.template_id,
+                    SavedAgent.user_id == current_user.id,
+                )
             )
-        )
-        template = result.scalar_one_or_none()
-        if not template:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Template not found",
-            )
+            template = result.scalar_one_or_none()
+            if not template:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Template not found",
+                )
+            session.log("Template validated", template_id=body.template_id)
 
     # Validate credentials
     if body.credential_ids:
-        result = await db.execute(
-            select(Credential).where(
-                Credential.id.in_(body.credential_ids),
-                Credential.user_id == current_user.id,
+        with session.span("Validate credentials"):
+            result = await db.execute(
+                select(Credential).where(
+                    Credential.id.in_(body.credential_ids),
+                    Credential.user_id == current_user.id,
+                )
             )
-        )
-        credentials = result.scalars().all()
-        if len(credentials) != len(body.credential_ids):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="One or more credentials not found",
-            )
+            credentials = result.scalars().all()
+            if len(credentials) != len(body.credential_ids):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="One or more credentials not found",
+                )
+            session.log("Credentials validated", count=len(credentials))
 
     # Create storage bucket for data exchange
-    try:
-        bucket_id = await providers.storage.create_bucket(
-            name=bucket_name,
-            user_id=current_user.id,
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create storage bucket: {str(e)}",
-        )
+    with session.span("Create storage bucket"):
+        try:
+            bucket_id = await providers.storage.create_bucket(
+                name=bucket_name,
+                user_id=current_user.id,
+                session=session,
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to create storage bucket: {str(e)}",
+            )
 
     # Create VM
-    try:
-        vm_config = VMConfig(
-            name=vm_name,
-            size=vm_size,
-            image="default",
-            user_id=current_user.id,
-            agent_id=agent_id,
-            startup_script=get_startup_script(body.platform_type),
-        )
-        vm_instance = await providers.vm.create_vm(vm_config)
-    except Exception as e:
-        # Clean up bucket on failure
+    with session.span("Create VM"):
         try:
-            await providers.storage.delete_bucket(bucket_id)
-        except Exception:
-            pass
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create VM: {str(e)}",
-        )
+            vm_config = VMConfig(
+                name=vm_name,
+                size=vm_size,
+                image="default",
+                user_id=current_user.id,
+                agent_id=agent_id,
+                startup_script=get_startup_script(body.platform_type),
+            )
+            vm_instance = await providers.vm.create_vm(vm_config, session=session)
+        except Exception as e:
+            # Clean up bucket on failure
+            session.log("VM creation failed, cleaning up bucket", error=str(e))
+            try:
+                await providers.storage.delete_bucket(bucket_id, session=session)
+            except Exception:
+                pass
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to create VM: {str(e)}",
+            )
 
     # Create agent record
     agent = ActiveAgent(
@@ -296,8 +307,11 @@ async def delete_agent(
     db: DbSession,
     providers: UserCloudProviders,
     agent_id: str,
+    session: TraceSession,
 ) -> None:
     """Delete an agent (destroys VM and bucket)."""
+    session.set_user(current_user)
+    session.log("Deleting agent", agent_id=agent_id)
 
     result = await db.execute(
         select(ActiveAgent).where(
@@ -314,18 +328,20 @@ async def delete_agent(
         )
 
     # Delete VM
-    try:
-        await providers.vm.delete_vm(agent.vm_id)
-    except Exception as e:
-        # Log but continue - VM might already be deleted
-        pass
+    with session.span("Delete VM"):
+        try:
+            await providers.vm.delete_vm(agent.vm_id, session=session)
+        except Exception as e:
+            # Log but continue - VM might already be deleted
+            session.log("VM deletion failed (may already be deleted)", error=str(e))
 
     # Delete storage bucket
-    try:
-        await providers.storage.delete_bucket(agent.bucket_id)
-    except Exception as e:
-        # Log but continue - bucket might already be deleted
-        pass
+    with session.span("Delete storage bucket"):
+        try:
+            await providers.storage.delete_bucket(agent.bucket_id, session=session)
+        except Exception as e:
+            # Log but continue - bucket might already be deleted
+            session.log("Bucket deletion failed (may already be deleted)", error=str(e))
 
     # Log action
     await log_action(
@@ -341,6 +357,7 @@ async def delete_agent(
     # Delete from database
     await db.delete(agent)
     await db.commit()
+    session.log("Agent deleted", agent_id=agent_id, name=agent.name)
 
 
 @router.post("/{agent_id}/start", response_model=AgentResponse)
@@ -350,8 +367,11 @@ async def start_agent(
     db: DbSession,
     providers: UserCloudProviders,
     agent_id: str,
+    session: TraceSession,
 ) -> ActiveAgent:
     """Start a stopped agent."""
+    session.set_user(current_user)
+    session.log("Starting agent", agent_id=agent_id)
 
     result = await db.execute(
         select(ActiveAgent).where(
@@ -374,16 +394,17 @@ async def start_agent(
         )
 
     # Start VM
-    try:
-        await providers.vm.start_vm(agent.vm_id)
-        vm_instance = await providers.vm.get_vm_status(agent.vm_id)
-        agent.vm_status = vm_instance.status.value
-        agent.vm_internal_ip = vm_instance.internal_ip
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to start VM: {str(e)}",
-        )
+    with session.span("Start VM"):
+        try:
+            await providers.vm.start_vm(agent.vm_id, session=session)
+            vm_instance = await providers.vm.get_vm_status(agent.vm_id, session=session)
+            agent.vm_status = vm_instance.status.value
+            agent.vm_internal_ip = vm_instance.internal_ip
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to start VM: {str(e)}",
+            )
 
     # Log action
     await log_action(
@@ -397,6 +418,7 @@ async def start_agent(
 
     await db.commit()
     await db.refresh(agent)
+    session.log("Agent started", agent_id=agent_id, status=agent.vm_status)
 
     return agent
 
@@ -408,8 +430,11 @@ async def stop_agent(
     db: DbSession,
     providers: UserCloudProviders,
     agent_id: str,
+    session: TraceSession,
 ) -> ActiveAgent:
     """Stop a running agent."""
+    session.set_user(current_user)
+    session.log("Stopping agent", agent_id=agent_id)
 
     result = await db.execute(
         select(ActiveAgent).where(
@@ -432,15 +457,16 @@ async def stop_agent(
         )
 
     # Stop VM
-    try:
-        await providers.vm.stop_vm(agent.vm_id)
-        vm_instance = await providers.vm.get_vm_status(agent.vm_id)
-        agent.vm_status = vm_instance.status.value
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to stop VM: {str(e)}",
-        )
+    with session.span("Stop VM"):
+        try:
+            await providers.vm.stop_vm(agent.vm_id, session=session)
+            vm_instance = await providers.vm.get_vm_status(agent.vm_id, session=session)
+            agent.vm_status = vm_instance.status.value
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to stop VM: {str(e)}",
+            )
 
     # Log action
     await log_action(
@@ -454,6 +480,7 @@ async def stop_agent(
 
     await db.commit()
     await db.refresh(agent)
+    session.log("Agent stopped", agent_id=agent_id, status=agent.vm_status)
 
     return agent
 
