@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  # PostgreSQL database
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: zergrush
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/zergrush
+      - DEBUG=true
+      - SECRET_KEY=dev-secret-key-change-in-production
+      - FRONTEND_URL=http://localhost:3000
+      - OAUTH_REDIRECT_URI=http://localhost:8000/auth/callback
+      # GCP settings (uncomment and fill in for GCP integration)
+      # - GCP_PROJECT_ID=your-project-id
+      # - GOOGLE_CLIENT_ID=your-client-id
+      # - GOOGLE_CLIENT_SECRET=your-client-secret
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: npm run dev -- --host
+
+volumes:
+  postgres_data:
