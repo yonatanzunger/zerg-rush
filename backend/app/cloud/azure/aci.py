@@ -30,7 +30,7 @@ from app.cloud.interfaces import (
     UserCredentials,
 )
 from app.config import get_settings
-from app.tracing import Session
+from app.tracing import Session, FunctionTrace
 
 
 class StaticTokenCredential:
@@ -165,84 +165,82 @@ class AzureACIProvider(VMProvider):
         self, config: VMConfig, session: Session | None = None
     ) -> VMInstance:
         """Create a new Azure Container Instance for the agent."""
-        if session:
-            session.log(
-                "Creating Azure Container Instance",
-                name=config.name,
-                size=config.size,
-                agent_id=config.agent_id,
+        with FunctionTrace(
+            session,
+            "Creating Azure Container Instance",
+            name=config.name,
+            size=config.size,
+            agent_id=config.agent_id,
+        ) as trace:
+            cpu, memory_gb = self._size_to_resources(config.size)
+            container_group_name = self._sanitize_name(config.name)
+
+            # Build environment variables
+            env_vars = [
+                EnvironmentVariable(name="AGENT_ID", value=config.agent_id),
+                EnvironmentVariable(name="USER_ID", value=config.user_id),
+                EnvironmentVariable(name="GATEWAY_PORT", value="8080"),
+            ]
+
+            # Add any custom labels as env vars
+            if config.labels:
+                for key, value in config.labels.items():
+                    env_vars.append(
+                        EnvironmentVariable(
+                            name=f"LABEL_{key.upper().replace('-', '_')}",
+                            value=value,
+                        )
+                    )
+
+            # Build container configuration
+            container = Container(
+                name="agent",
+                image=self._get_container_image(
+                    config.labels.get("platform_type", "openclaw") if config.labels else "openclaw"
+                ),
+                resources=ResourceRequirements(
+                    requests=ResourceRequests(cpu=cpu, memory_in_gb=memory_gb)
+                ),
+                ports=[ContainerPort(port=8080)],
+                environment_variables=env_vars,
             )
 
-        cpu, memory_gb = self._size_to_resources(config.size)
-        container_group_name = self._sanitize_name(config.name)
+            # Build container group - use private IP only for security
+            container_group = ContainerGroup(
+                location=self.location,
+                containers=[container],
+                os_type=OperatingSystemTypes.LINUX,
+                restart_policy="Always",
+                ip_address=IpAddress(
+                    ports=[Port(protocol=ContainerGroupNetworkProtocol.TCP, port=8080)],
+                    type="Private" if self.vnet_name else "Public",
+                ),
+                tags={
+                    "zerg-rush": "agent",
+                    "user-id": config.user_id.replace("-", "")[:63],
+                    "agent-id": config.agent_id.replace("-", "")[:63],
+                },
+            )
 
-        # Build environment variables
-        env_vars = [
-            EnvironmentVariable(name="AGENT_ID", value=config.agent_id),
-            EnvironmentVariable(name="USER_ID", value=config.user_id),
-            EnvironmentVariable(name="GATEWAY_PORT", value="8080"),
-        ]
-
-        # Add any custom labels as env vars
-        if config.labels:
-            for key, value in config.labels.items():
-                env_vars.append(
-                    EnvironmentVariable(
-                        name=f"LABEL_{key.upper().replace('-', '_')}",
-                        value=value,
-                    )
+            # Add VNet configuration if available
+            if self.vnet_name and self.subnet_name:
+                from azure.mgmt.containerinstance.models import (
+                    ContainerGroupSubnetId,
                 )
 
-        # Build container configuration
-        container = Container(
-            name="agent",
-            image=self._get_container_image(
-                config.labels.get("platform_type", "openclaw") if config.labels else "openclaw"
-            ),
-            resources=ResourceRequirements(
-                requests=ResourceRequests(cpu=cpu, memory_in_gb=memory_gb)
-            ),
-            ports=[ContainerPort(port=8080)],
-            environment_variables=env_vars,
-        )
+                subnet_id = (
+                    f"/subscriptions/{self.subscription_id}"
+                    f"/resourceGroups/{self.resource_group}"
+                    f"/providers/Microsoft.Network/virtualNetworks/{self.vnet_name}"
+                    f"/subnets/{self.subnet_name}"
+                )
+                container_group.subnet_ids = [
+                    ContainerGroupSubnetId(id=subnet_id)
+                ]
+                # Remove IP address when using subnet (handled by VNet)
+                container_group.ip_address = None
 
-        # Build container group - use private IP only for security
-        container_group = ContainerGroup(
-            location=self.location,
-            containers=[container],
-            os_type=OperatingSystemTypes.LINUX,
-            restart_policy="Always",
-            ip_address=IpAddress(
-                ports=[Port(protocol=ContainerGroupNetworkProtocol.TCP, port=8080)],
-                type="Private" if self.vnet_name else "Public",
-            ),
-            tags={
-                "zerg-rush": "agent",
-                "user-id": config.user_id.replace("-", "")[:63],
-                "agent-id": config.agent_id.replace("-", "")[:63],
-            },
-        )
-
-        # Add VNet configuration if available
-        if self.vnet_name and self.subnet_name:
-            from azure.mgmt.containerinstance.models import (
-                ContainerGroupSubnetId,
-            )
-
-            subnet_id = (
-                f"/subscriptions/{self.subscription_id}"
-                f"/resourceGroups/{self.resource_group}"
-                f"/providers/Microsoft.Network/virtualNetworks/{self.vnet_name}"
-                f"/subnets/{self.subnet_name}"
-            )
-            container_group.subnet_ids = [
-                ContainerGroupSubnetId(id=subnet_id)
-            ]
-            # Remove IP address when using subnet (handled by VNet)
-            container_group.ip_address = None
-
-        # Create the container group
-        try:
+            # Create the container group
             poller = self.client.container_groups.begin_create_or_update(
                 self.resource_group,
                 container_group_name,
@@ -252,93 +250,44 @@ class AzureACIProvider(VMProvider):
             # Wait for creation to complete
             poller.result()
 
-            if session:
-                session.log("Azure Container Instance created", name=container_group_name)
+            trace.log("Azure Container Instance created", name=container_group_name)
 
             return await self.get_vm_status(container_group_name, session=session)
-        except Exception as e:
-            if session:
-                session.log(
-                    "Azure Container Instance creation failed",
-                    name=container_group_name,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
 
     async def delete_vm(self, vm_id: str, session: Session | None = None) -> None:
         """Delete an Azure Container Instance."""
-        if session:
-            session.log("Deleting Azure Container Instance", vm_id=vm_id)
+        with FunctionTrace(session, "Deleting Azure Container Instance", vm_id=vm_id) as trace:
+            container_group_name = self._sanitize_name(vm_id)
 
-        container_group_name = self._sanitize_name(vm_id)
-
-        try:
             poller = self.client.container_groups.begin_delete(
                 self.resource_group,
                 container_group_name,
             )
             poller.result()
-            if session:
-                session.log("Azure Container Instance deleted", vm_id=vm_id)
-        except Exception as e:
-            if session:
-                session.log(
-                    "Azure Container Instance deletion failed",
-                    vm_id=vm_id,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
+            trace.log("Azure Container Instance deleted", vm_id=vm_id)
 
     async def start_vm(self, vm_id: str, session: Session | None = None) -> None:
         """Start a stopped Azure Container Instance."""
-        if session:
-            session.log("Starting Azure Container Instance", vm_id=vm_id)
+        with FunctionTrace(session, "Starting Azure Container Instance", vm_id=vm_id) as trace:
+            container_group_name = self._sanitize_name(vm_id)
 
-        container_group_name = self._sanitize_name(vm_id)
-
-        try:
             poller = self.client.container_groups.begin_start(
                 self.resource_group,
                 container_group_name,
             )
             poller.result()
-            if session:
-                session.log("Azure Container Instance started", vm_id=vm_id)
-        except Exception as e:
-            if session:
-                session.log(
-                    "Azure Container Instance start failed",
-                    vm_id=vm_id,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
+            trace.log("Azure Container Instance started", vm_id=vm_id)
 
     async def stop_vm(self, vm_id: str, session: Session | None = None) -> None:
         """Stop a running Azure Container Instance."""
-        if session:
-            session.log("Stopping Azure Container Instance", vm_id=vm_id)
+        with FunctionTrace(session, "Stopping Azure Container Instance", vm_id=vm_id) as trace:
+            container_group_name = self._sanitize_name(vm_id)
 
-        container_group_name = self._sanitize_name(vm_id)
-
-        try:
             self.client.container_groups.stop(
                 self.resource_group,
                 container_group_name,
             )
-            if session:
-                session.log("Azure Container Instance stopped", vm_id=vm_id)
-        except Exception as e:
-            if session:
-                session.log(
-                    "Azure Container Instance stop failed",
-                    vm_id=vm_id,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
+            trace.log("Azure Container Instance stopped", vm_id=vm_id)
 
     async def get_vm_status(
         self, vm_id: str, session: Session | None = None

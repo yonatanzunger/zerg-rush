@@ -15,7 +15,7 @@ from app.cloud.interfaces import (
     UserCredentials,
 )
 from app.config import get_settings
-from app.tracing import Session
+from app.tracing import Session, FunctionTrace
 
 
 class GCPStorageProvider(StorageProvider):
@@ -58,10 +58,9 @@ class GCPStorageProvider(StorageProvider):
         """Create a new GCS bucket."""
         bucket_name = self._get_bucket_name(name, user_id)
 
-        if session:
-            session.log("Creating GCS bucket", name=name, bucket_name=bucket_name)
-
-        try:
+        with FunctionTrace(
+            session, "Creating GCS bucket", name=name, bucket_name=bucket_name
+        ) as trace:
             bucket = self.client.bucket(bucket_name)
             bucket.storage_class = "STANDARD"
 
@@ -84,28 +83,15 @@ class GCPStorageProvider(StorageProvider):
             )
             new_bucket.patch()
 
-            if session:
-                session.log("GCS bucket created", bucket_name=bucket_name)
+            trace.log("GCS bucket created", bucket_name=bucket_name)
 
             return bucket_name
-        except Exception as e:
-            if session:
-                session.log(
-                    "GCS bucket creation failed",
-                    bucket_name=bucket_name,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
 
     async def delete_bucket(
         self, bucket_id: str, session: Session | None = None
     ) -> None:
         """Delete a GCS bucket and all its contents."""
-        if session:
-            session.log("Deleting GCS bucket", bucket_id=bucket_id)
-
-        try:
+        with FunctionTrace(session, "Deleting GCS bucket", bucket_id=bucket_id) as trace:
             bucket = self.client.bucket(bucket_id)
 
             # Delete all objects first
@@ -116,17 +102,7 @@ class GCPStorageProvider(StorageProvider):
             # Delete the bucket
             bucket.delete()
 
-            if session:
-                session.log("GCS bucket deleted", bucket_id=bucket_id)
-        except Exception as e:
-            if session:
-                session.log(
-                    "GCS bucket deletion failed",
-                    bucket_id=bucket_id,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
+            trace.log("GCS bucket deleted", bucket_id=bucket_id)
 
     async def create_scoped_credentials(
         self,

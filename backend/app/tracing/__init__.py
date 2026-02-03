@@ -3,6 +3,7 @@
 from app.tracing.tracer import (
     ActiveSession,
     EventTracer,
+    FunctionTrace,
     NoOpSession,
     Session,
     TraceEvent,
@@ -11,6 +12,7 @@ from app.tracing.tracer import (
 __all__ = [
     "ActiveSession",
     "EventTracer",
+    "FunctionTrace",
     "NoOpSession",
     "Session",
     "TraceEvent",

@@ -32,8 +32,6 @@ class TestGCPVMProviderConstruction(unittest.IsolatedAsyncioTestCase):
         self.mock_compute.WaitZoneOperationRequest.return_value = MagicMock()
         self.mock_compute.GetInstanceRequest.return_value = MagicMock()
 
-        # Set up enum values
-        self.mock_compute.AttachedDisk.Type.PERSISTENT = "PERSISTENT"
 
         # Patch settings
         self.settings_patcher = patch("app.cloud.gcp.vm.get_settings")
@@ -45,10 +43,18 @@ class TestGCPVMProviderConstruction(unittest.IsolatedAsyncioTestCase):
             gcp_agent_subnet="test-subnet",
         )
 
+        # Patch FunctionTrace context manager
+        self.trace_patcher = patch("app.cloud.gcp.vm.FunctionTrace")
+        self.mock_trace_class = self.trace_patcher.start()
+        self.mock_trace = MagicMock()
+        self.mock_trace_class.return_value.__enter__ = MagicMock(return_value=self.mock_trace)
+        self.mock_trace_class.return_value.__exit__ = MagicMock(return_value=False)
+
     def tearDown(self):
         """Stop patchers."""
         self.compute_patcher.stop()
         self.settings_patcher.stop()
+        self.trace_patcher.stop()
 
     async def test_create_vm_sets_correct_machine_type(self):
         """Test that machine type is formatted correctly."""

@@ -11,7 +11,7 @@ from app.cloud.interfaces import (
     UserCredentials,
 )
 from app.config import get_settings
-from app.tracing import Session
+from app.tracing import Session, FunctionTrace
 
 
 class GCPSecretProvider(SecretProvider):
@@ -60,10 +60,7 @@ class GCPSecretProvider(SecretProvider):
         secret_id = self._get_secret_id(user_id, name)
         parent = f"projects/{self.project_id}"
 
-        if session:
-            session.log("Storing secret", name=name, secret_id=secret_id)
-
-        try:
+        with FunctionTrace(session, "Storing secret", name=name, secret_id=secret_id) as trace:
             # Create the secret
             secret = {
                 "replication": {"automatic": {}},
@@ -98,19 +95,9 @@ class GCPSecretProvider(SecretProvider):
                 }
             )
 
-            if session:
-                session.log("Secret stored", secret_id=secret_id)
+            trace.log("Secret stored", secret_id=secret_id)
 
             return created_secret.name
-        except Exception as e:
-            if session:
-                session.log(
-                    "Secret storage failed",
-                    secret_id=secret_id,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
 
     async def get_secret(
         self, secret_ref: str, session: Session | None = None
@@ -119,41 +106,18 @@ class GCPSecretProvider(SecretProvider):
         # Access the latest version
         name = f"{secret_ref}/versions/latest"
 
-        try:
+        with FunctionTrace(session, "Retrieving secret", secret_ref=secret_ref) as trace:
             response = self.client.access_secret_version(name=name)
-            if session:
-                session.log("Secret retrieved", secret_ref=secret_ref)
+            trace.log("Secret retrieved", secret_ref=secret_ref)
             return response.payload.data.decode("utf-8")
-        except Exception as e:
-            if session:
-                session.log(
-                    "Secret retrieval failed",
-                    secret_ref=secret_ref,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
 
     async def delete_secret(
         self, secret_ref: str, session: Session | None = None
     ) -> None:
         """Delete a secret from GCP Secret Manager."""
-        if session:
-            session.log("Deleting secret", secret_ref=secret_ref)
-
-        try:
+        with FunctionTrace(session, "Deleting secret", secret_ref=secret_ref) as trace:
             self.client.delete_secret(name=secret_ref)
-            if session:
-                session.log("Secret deleted", secret_ref=secret_ref)
-        except Exception as e:
-            if session:
-                session.log(
-                    "Secret deletion failed",
-                    secret_ref=secret_ref,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
+            trace.log("Secret deleted", secret_ref=secret_ref)
 
     async def list_secrets(
         self, user_id: str, session: Session | None = None

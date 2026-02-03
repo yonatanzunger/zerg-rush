@@ -17,7 +17,7 @@ from app.cloud.interfaces import (
     UserCredentials,
 )
 from app.config import get_settings
-from app.tracing import Session
+from app.tracing import Session, FunctionTrace
 
 
 class GCPVMProvider(VMProvider):
@@ -40,7 +40,9 @@ class GCPVMProvider(VMProvider):
             credentials = OAuthCredentials(token=user_credentials.access_token)
             self.project_id = user_credentials.project_id or settings.gcp_project_id
             self.instances_client = compute_v1.InstancesClient(credentials=credentials)
-            self.operations_client = compute_v1.ZoneOperationsClient(credentials=credentials)
+            self.operations_client = compute_v1.ZoneOperationsClient(
+                credentials=credentials
+            )
         else:
             # Fall back to application default credentials (for system operations)
             self.project_id = settings.gcp_project_id
@@ -72,63 +74,63 @@ class GCPVMProvider(VMProvider):
         self, config: VMConfig, session: Session | None = None
     ) -> VMInstance:
         """Create a new GCP Compute Engine instance."""
-        if session:
-            session.log(
-                "Creating GCE VM",
-                name=config.name,
-                size=config.size,
-                agent_id=config.agent_id,
+        with FunctionTrace(
+            session,
+            "Creating GCE VM",
+            name=config.name,
+            size=config.size,
+            agent_id=config.agent_id,
+        ) as trace:
+            # Build instance configuration
+            instance = compute_v1.Instance()
+            instance.name = config.name
+            instance.machine_type = f"zones/{self.zone}/machineTypes/{config.size}"
+
+            # Boot disk
+            disk = compute_v1.AttachedDisk()
+            disk.auto_delete = True
+            disk.boot = True
+            disk.type_ = "PERSISTENT"
+
+            initialize_params = compute_v1.AttachedDiskInitializeParams()
+            initialize_params.source_image = self._get_vm_image(config.image)
+            initialize_params.disk_size_gb = 20
+            initialize_params.disk_type = f"zones/{self.zone}/diskTypes/pd-standard"
+            disk.initialize_params = initialize_params
+            instance.disks = [disk]
+
+            # Network interface (internal only, no external IP)
+            network_interface = compute_v1.NetworkInterface()
+            network_interface.network = (
+                f"projects/{self.project_id}/global/networks/{self.network}"
             )
+            network_interface.subnetwork = f"projects/{self.project_id}/regions/{self.zone.rsplit('-', 1)[0]}/subnetworks/{self.subnet}"
+            # No access_configs means no external IP
+            instance.network_interfaces = [network_interface]
 
-        # Build instance configuration
-        instance = compute_v1.Instance()
-        instance.name = config.name
-        instance.machine_type = f"zones/{self.zone}/machineTypes/{config.size}"
+            # Labels
+            instance.labels = {
+                "zerg-rush": "agent",
+                "user-id": config.user_id.replace("-", ""),
+                "agent-id": config.agent_id.replace("-", ""),
+            }
+            if config.labels:
+                instance.labels.update(config.labels)
 
-        # Boot disk
-        disk = compute_v1.AttachedDisk()
-        disk.auto_delete = True
-        disk.boot = True
-        disk.type_ = compute_v1.AttachedDisk.Type.PERSISTENT
+            # Startup script
+            if config.startup_script:
+                metadata = compute_v1.Metadata()
+                metadata.items = [
+                    {"key": "startup-script", "value": config.startup_script}
+                ]
+                instance.metadata = metadata
 
-        initialize_params = compute_v1.AttachedDiskInitializeParams()
-        initialize_params.source_image = self._get_vm_image(config.image)
-        initialize_params.disk_size_gb = 20
-        initialize_params.disk_type = f"zones/{self.zone}/diskTypes/pd-standard"
-        disk.initialize_params = initialize_params
-        instance.disks = [disk]
+            # Create the instance
+            request = compute_v1.InsertInstanceRequest()
+            request.project = self.project_id
+            request.zone = self.zone
+            request.instance_resource = instance
 
-        # Network interface (internal only, no external IP)
-        network_interface = compute_v1.NetworkInterface()
-        network_interface.network = f"projects/{self.project_id}/global/networks/{self.network}"
-        network_interface.subnetwork = f"projects/{self.project_id}/regions/{self.zone.rsplit('-', 1)[0]}/subnetworks/{self.subnet}"
-        # No access_configs means no external IP
-        instance.network_interfaces = [network_interface]
-
-        # Labels
-        instance.labels = {
-            "zerg-rush": "agent",
-            "user-id": config.user_id.replace("-", ""),
-            "agent-id": config.agent_id.replace("-", ""),
-        }
-        if config.labels:
-            instance.labels.update(config.labels)
-
-        # Startup script
-        if config.startup_script:
-            metadata = compute_v1.Metadata()
-            metadata.items = [
-                {"key": "startup-script", "value": config.startup_script}
-            ]
-            instance.metadata = metadata
-
-        # Create the instance
-        request = compute_v1.InsertInstanceRequest()
-        request.project = self.project_id
-        request.zone = self.zone
-        request.instance_resource = instance
-
-        try:
             operation = self.instances_client.insert(request=request)
 
             # Wait for operation to complete
@@ -138,27 +140,14 @@ class GCPVMProvider(VMProvider):
             wait_request.operation = operation.name
             self.operations_client.wait(request=wait_request)
 
-            if session:
-                session.log("GCE VM created", name=config.name)
+            trace.log("GCE VM created", name=config.name)
 
             # Get the created instance
             return await self.get_vm_status(config.name, session=session)
-        except Exception as e:
-            if session:
-                session.log(
-                    "GCE VM creation failed",
-                    name=config.name,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
 
     async def delete_vm(self, vm_id: str, session: Session | None = None) -> None:
         """Delete a GCP Compute Engine instance."""
-        if session:
-            session.log("Deleting GCE VM", vm_id=vm_id)
-
-        try:
+        with FunctionTrace(session, "Deleting GCE VM", vm_id=vm_id) as trace:
             request = compute_v1.DeleteInstanceRequest()
             request.project = self.project_id
             request.zone = self.zone
@@ -173,24 +162,11 @@ class GCPVMProvider(VMProvider):
             wait_request.operation = operation.name
             self.operations_client.wait(request=wait_request)
 
-            if session:
-                session.log("GCE VM deleted", vm_id=vm_id)
-        except Exception as e:
-            if session:
-                session.log(
-                    "GCE VM deletion failed",
-                    vm_id=vm_id,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
+            trace.log("GCE VM deleted", vm_id=vm_id)
 
     async def start_vm(self, vm_id: str, session: Session | None = None) -> None:
         """Start a stopped GCP Compute Engine instance."""
-        if session:
-            session.log("Starting GCE VM", vm_id=vm_id)
-
-        try:
+        with FunctionTrace(session, "Starting GCE VM", vm_id=vm_id) as trace:
             request = compute_v1.StartInstanceRequest()
             request.project = self.project_id
             request.zone = self.zone
@@ -204,24 +180,11 @@ class GCPVMProvider(VMProvider):
             wait_request.operation = operation.name
             self.operations_client.wait(request=wait_request)
 
-            if session:
-                session.log("GCE VM started", vm_id=vm_id)
-        except Exception as e:
-            if session:
-                session.log(
-                    "GCE VM start failed",
-                    vm_id=vm_id,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
+            trace.log("GCE VM started", vm_id=vm_id)
 
     async def stop_vm(self, vm_id: str, session: Session | None = None) -> None:
         """Stop a running GCP Compute Engine instance."""
-        if session:
-            session.log("Stopping GCE VM", vm_id=vm_id)
-
-        try:
+        with FunctionTrace(session, "Stopping GCE VM", vm_id=vm_id) as trace:
             request = compute_v1.StopInstanceRequest()
             request.project = self.project_id
             request.zone = self.zone
@@ -235,17 +198,7 @@ class GCPVMProvider(VMProvider):
             wait_request.operation = operation.name
             self.operations_client.wait(request=wait_request)
 
-            if session:
-                session.log("GCE VM stopped", vm_id=vm_id)
-        except Exception as e:
-            if session:
-                session.log(
-                    "GCE VM stop failed",
-                    vm_id=vm_id,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
+            trace.log("GCE VM stopped", vm_id=vm_id)
 
     async def get_vm_status(
         self, vm_id: str, session: Session | None = None
@@ -265,7 +218,10 @@ class GCPVMProvider(VMProvider):
 
         # Get external IP if any
         external_ip = None
-        if instance.network_interfaces and instance.network_interfaces[0].access_configs:
+        if (
+            instance.network_interfaces
+            and instance.network_interfaces[0].access_configs
+        ):
             external_ip = instance.network_interfaces[0].access_configs[0].nat_i_p
 
         return VMInstance(
@@ -313,8 +269,7 @@ class GCPVMProvider(VMProvider):
         Note: This requires SSH access to the VM.
         """
         raise NotImplementedError(
-            "File upload requires SSH access. "
-            "Use Cloud Storage for file exchange."
+            "File upload requires SSH access. " "Use Cloud Storage for file exchange."
         )
 
     async def download_file(
@@ -325,8 +280,7 @@ class GCPVMProvider(VMProvider):
         Note: This requires SSH access to the VM.
         """
         raise NotImplementedError(
-            "File download requires SSH access. "
-            "Use Cloud Storage for file exchange."
+            "File download requires SSH access. " "Use Cloud Storage for file exchange."
         )
 
     async def list_files(
@@ -337,6 +291,5 @@ class GCPVMProvider(VMProvider):
         Note: This requires SSH access to the VM.
         """
         raise NotImplementedError(
-            "File listing requires SSH access. "
-            "Use Cloud Storage for file exchange."
+            "File listing requires SSH access. " "Use Cloud Storage for file exchange."
         )

@@ -5,13 +5,17 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, ContextManager, Generator, Protocol
+from typing import Any, ContextManager, Generator, Protocol
 from uuid import uuid4
+import traceback
 
 from app.config import get_settings
+from app.models import User
 
-if TYPE_CHECKING:
-    from app.models import User
+# If set to True, this will dump out detailed tracebacks into the trace log when
+# exceptions occur within traced functions. This is useful for debugging but may
+# expose sensitive information, so it should be used with caution.
+SHOW_TRACES_ON_ERROR = True
 
 
 @dataclass
@@ -43,6 +47,32 @@ class Session(Protocol):
     def finalize(self) -> None:
         """Finalize the session and output trace if debug enabled."""
         ...
+
+
+class FunctionTrace(ContextManager[None]):
+    """Context manager for tracing a function execution."""
+
+    def __init__(self, session: Session | None, message: str, **kwargs: Any) -> None:
+        self._session = session
+        self._message = message
+        self._kwargs = kwargs
+
+    def __enter__(self) -> None:
+        self.log(self._message, _indent="", **self._kwargs)
+        return self
+
+    def __exit__(self, exc_type, exc_value, tb) -> None:
+        if exc_type is not None and self._session is not None:
+            self.log(f"Exception in {self._message}: {exc_value}")
+            if SHOW_TRACES_ON_ERROR:
+                trace = traceback.extract_tb(tb)
+                for frame in trace:
+                    self.log(f"  {frame.filename}:{frame.lineno} in {frame.name}")
+
+    def log(self, message: str, _indent: str = "  ", **kwargs: Any) -> None:
+        """Log an event within the function trace."""
+        if self._session is not None:
+            self._session.log(_indent + message, **kwargs)
 
 
 @dataclass

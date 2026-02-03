@@ -12,7 +12,7 @@ from app.cloud.interfaces import (
     TokenResponse,
 )
 from app.config import get_settings
-from app.tracing import Session
+from app.tracing import Session, FunctionTrace
 
 
 class GoogleIdentityProvider(IdentityProvider):
@@ -56,10 +56,7 @@ class GoogleIdentityProvider(IdentityProvider):
         self, code: str, redirect_uri: str, session: Session | None = None
     ) -> TokenResponse:
         """Exchange authorization code for tokens."""
-        if session:
-            session.log("Exchanging authorization code for tokens")
-
-        try:
+        with FunctionTrace(session, "Exchanging authorization code for tokens") as trace:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     self.TOKEN_URL,
@@ -74,8 +71,7 @@ class GoogleIdentityProvider(IdentityProvider):
                 response.raise_for_status()
                 data = response.json()
 
-            if session:
-                session.log("Token exchange successful")
+            trace.log("Token exchange successful")
 
             return TokenResponse(
                 access_token=data["access_token"],
@@ -83,23 +79,12 @@ class GoogleIdentityProvider(IdentityProvider):
                 expires_in=data["expires_in"],
                 token_type=data.get("token_type", "Bearer"),
             )
-        except Exception as e:
-            if session:
-                session.log(
-                    "Token exchange failed",
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
 
     async def verify_token(
         self, token: str, session: Session | None = None
     ) -> UserInfo:
         """Verify an access token and return user info."""
-        if session:
-            session.log("Verifying token via Google userinfo API")
-
-        try:
+        with FunctionTrace(session, "Verifying token via Google userinfo API") as trace:
             async with httpx.AsyncClient() as client:
                 response = await client.get(
                     self.USERINFO_URL,
@@ -108,8 +93,7 @@ class GoogleIdentityProvider(IdentityProvider):
                 response.raise_for_status()
                 data = response.json()
 
-            if session:
-                session.log("Token verified successfully")
+            trace.log("Token verified successfully")
 
             return UserInfo(
                 subject=data["sub"],
@@ -117,23 +101,12 @@ class GoogleIdentityProvider(IdentityProvider):
                 name=data.get("name", data["email"]),
                 picture=data.get("picture"),
             )
-        except Exception as e:
-            if session:
-                session.log(
-                    "Token verification failed",
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
 
     async def refresh_token(
         self, refresh_token: str, session: Session | None = None
     ) -> TokenResponse:
         """Refresh an access token."""
-        if session:
-            session.log("Refreshing access token")
-
-        try:
+        with FunctionTrace(session, "Refreshing access token") as trace:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     self.TOKEN_URL,
@@ -147,8 +120,7 @@ class GoogleIdentityProvider(IdentityProvider):
                 response.raise_for_status()
                 data = response.json()
 
-            if session:
-                session.log("Token refreshed successfully")
+            trace.log("Token refreshed successfully")
 
             return TokenResponse(
                 access_token=data["access_token"],
@@ -156,11 +128,3 @@ class GoogleIdentityProvider(IdentityProvider):
                 expires_in=data["expires_in"],
                 token_type=data.get("token_type", "Bearer"),
             )
-        except Exception as e:
-            if session:
-                session.log(
-                    "Token refresh failed",
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise

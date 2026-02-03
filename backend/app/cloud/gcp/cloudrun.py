@@ -18,7 +18,7 @@ from app.cloud.interfaces import (
     UserCredentials,
 )
 from app.config import get_settings
-from app.tracing import Session
+from app.tracing import Session, FunctionTrace
 
 
 class GCPCloudRunProvider(VMProvider):
@@ -131,103 +131,88 @@ class GCPCloudRunProvider(VMProvider):
         self, config: VMConfig, session: Session | None = None
     ) -> VMInstance:
         """Create a new Cloud Run service for the agent."""
-        if session:
-            session.log(
-                "Creating Cloud Run service",
-                name=config.name,
-                size=config.size,
-                agent_id=config.agent_id,
+        with FunctionTrace(
+            session,
+            "Creating Cloud Run service",
+            name=config.name,
+            size=config.size,
+            agent_id=config.agent_id,
+        ) as trace:
+            cpu_limit, memory_limit = self._size_to_resources(config.size)
+
+            # Build environment variables
+            env_vars = [
+                run_v2.EnvVar(name="AGENT_ID", value=config.agent_id),
+                run_v2.EnvVar(name="USER_ID", value=config.user_id),
+                run_v2.EnvVar(name="GATEWAY_PORT", value="8080"),  # Cloud Run requires 8080
+            ]
+
+            # Add any custom labels as env vars
+            if config.labels:
+                for key, value in config.labels.items():
+                    env_vars.append(run_v2.EnvVar(
+                        name=f"LABEL_{key.upper().replace('-', '_')}",
+                        value=value
+                    ))
+
+            # Build container configuration
+            container = run_v2.Container(
+                image=self._get_container_image(config.labels.get("platform_type", "openclaw") if config.labels else "openclaw"),
+                ports=[run_v2.ContainerPort(container_port=8080)],
+                resources=run_v2.ResourceRequirements(
+                    limits={"cpu": cpu_limit, "memory": memory_limit},
+                ),
+                env=env_vars,
             )
 
-        cpu_limit, memory_limit = self._size_to_resources(config.size)
-
-        # Build environment variables
-        env_vars = [
-            run_v2.EnvVar(name="AGENT_ID", value=config.agent_id),
-            run_v2.EnvVar(name="USER_ID", value=config.user_id),
-            run_v2.EnvVar(name="GATEWAY_PORT", value="8080"),  # Cloud Run requires 8080
-        ]
-
-        # Add any custom labels as env vars
-        if config.labels:
-            for key, value in config.labels.items():
-                env_vars.append(run_v2.EnvVar(
-                    name=f"LABEL_{key.upper().replace('-', '_')}",
-                    value=value
-                ))
-
-        # Build container configuration
-        container = run_v2.Container(
-            image=self._get_container_image(config.labels.get("platform_type", "openclaw") if config.labels else "openclaw"),
-            ports=[run_v2.ContainerPort(container_port=8080)],
-            resources=run_v2.ResourceRequirements(
-                limits={"cpu": cpu_limit, "memory": memory_limit},
-            ),
-            env=env_vars,
-        )
-
-        # Build service template
-        template = run_v2.RevisionTemplate(
-            containers=[container],
-            scaling=run_v2.RevisionScaling(
-                min_instance_count=1,  # Always keep one instance running
-                max_instance_count=1,  # Single instance per agent
-            ),
-            timeout=duration_pb2.Duration(seconds=3600),  # 1 hour timeout
-            service_account=f"zerg-rush-agent@{self.project_id}.iam.gserviceaccount.com",
-        )
-
-        # Add VPC connector for internal networking if configured
-        if self.vpc_connector:
-            template.vpc_access = run_v2.VpcAccess(
-                connector=self.vpc_connector,
-                egress=run_v2.VpcAccess.VpcEgress.ALL_TRAFFIC,
+            # Build service template
+            template = run_v2.RevisionTemplate(
+                containers=[container],
+                scaling=run_v2.RevisionScaling(
+                    min_instance_count=1,  # Always keep one instance running
+                    max_instance_count=1,  # Single instance per agent
+                ),
+                timeout=duration_pb2.Duration(seconds=3600),  # 1 hour timeout
+                service_account=f"zerg-rush-agent@{self.project_id}.iam.gserviceaccount.com",
             )
 
-        # Build the service
-        service = run_v2.Service(
-            template=template,
-            labels={
-                "zerg-rush": "agent",
-                "user-id": config.user_id.replace("-", "")[:63],
-                "agent-id": config.agent_id.replace("-", "")[:63],
-            },
-            ingress=run_v2.IngressTraffic.INGRESS_TRAFFIC_INTERNAL_ONLY,  # Internal only for security
-        )
+            # Add VPC connector for internal networking if configured
+            if self.vpc_connector:
+                template.vpc_access = run_v2.VpcAccess(
+                    connector=self.vpc_connector,
+                    egress=run_v2.VpcAccess.VpcEgress.ALL_TRAFFIC,
+                )
 
-        # Create the service
-        request = run_v2.CreateServiceRequest(
-            parent=self._get_parent(),
-            service=service,
-            service_id=config.name,
-        )
+            # Build the service
+            service = run_v2.Service(
+                template=template,
+                labels={
+                    "zerg-rush": "agent",
+                    "user-id": config.user_id.replace("-", "")[:63],
+                    "agent-id": config.agent_id.replace("-", "")[:63],
+                },
+                ingress=run_v2.IngressTraffic.INGRESS_TRAFFIC_INTERNAL_ONLY,  # Internal only for security
+            )
 
-        try:
+            # Create the service
+            request = run_v2.CreateServiceRequest(
+                parent=self._get_parent(),
+                service=service,
+                service_id=config.name,
+            )
+
             operation = self.services_client.create_service(request=request)
 
             # Wait for the operation to complete
             result = operation.result()
 
-            if session:
-                session.log("Cloud Run service created", name=config.name)
+            trace.log("Cloud Run service created", name=config.name)
 
             return await self.get_vm_status(config.name, session=session)
-        except Exception as e:
-            if session:
-                session.log(
-                    "Cloud Run service creation failed",
-                    name=config.name,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
 
     async def delete_vm(self, vm_id: str, session: Session | None = None) -> None:
         """Delete a Cloud Run service."""
-        if session:
-            session.log("Deleting Cloud Run service", vm_id=vm_id)
-
-        try:
+        with FunctionTrace(session, "Deleting Cloud Run service", vm_id=vm_id) as trace:
             request = run_v2.DeleteServiceRequest(
                 name=self._get_service_name(vm_id),
             )
@@ -235,17 +220,7 @@ class GCPCloudRunProvider(VMProvider):
             operation = self.services_client.delete_service(request=request)
             operation.result()  # Wait for deletion
 
-            if session:
-                session.log("Cloud Run service deleted", vm_id=vm_id)
-        except Exception as e:
-            if session:
-                session.log(
-                    "Cloud Run service deletion failed",
-                    vm_id=vm_id,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
+            trace.log("Cloud Run service deleted", vm_id=vm_id)
 
     async def start_vm(self, vm_id: str, session: Session | None = None) -> None:
         """Start a Cloud Run service by setting min_instances to 1.
@@ -253,10 +228,7 @@ class GCPCloudRunProvider(VMProvider):
         Cloud Run services are always "running" in a sense, but we can
         control whether instances are kept warm by adjusting min_instances.
         """
-        if session:
-            session.log("Starting Cloud Run service", vm_id=vm_id)
-
-        try:
+        with FunctionTrace(session, "Starting Cloud Run service", vm_id=vm_id) as trace:
             # Get current service
             service = self.services_client.get_service(
                 name=self._get_service_name(vm_id)
@@ -269,17 +241,7 @@ class GCPCloudRunProvider(VMProvider):
             operation = self.services_client.update_service(request=request)
             operation.result()
 
-            if session:
-                session.log("Cloud Run service started", vm_id=vm_id)
-        except Exception as e:
-            if session:
-                session.log(
-                    "Cloud Run service start failed",
-                    vm_id=vm_id,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
+            trace.log("Cloud Run service started", vm_id=vm_id)
 
     async def stop_vm(self, vm_id: str, session: Session | None = None) -> None:
         """Stop a Cloud Run service by setting min_instances to 0.
@@ -287,10 +249,7 @@ class GCPCloudRunProvider(VMProvider):
         This allows the service to scale to zero, effectively "stopping" it
         while keeping the configuration intact.
         """
-        if session:
-            session.log("Stopping Cloud Run service", vm_id=vm_id)
-
-        try:
+        with FunctionTrace(session, "Stopping Cloud Run service", vm_id=vm_id) as trace:
             # Get current service
             service = self.services_client.get_service(
                 name=self._get_service_name(vm_id)
@@ -303,17 +262,7 @@ class GCPCloudRunProvider(VMProvider):
             operation = self.services_client.update_service(request=request)
             operation.result()
 
-            if session:
-                session.log("Cloud Run service stopped", vm_id=vm_id)
-        except Exception as e:
-            if session:
-                session.log(
-                    "Cloud Run service stop failed",
-                    vm_id=vm_id,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
+            trace.log("Cloud Run service stopped", vm_id=vm_id)
 
     async def get_vm_status(
         self, vm_id: str, session: Session | None = None

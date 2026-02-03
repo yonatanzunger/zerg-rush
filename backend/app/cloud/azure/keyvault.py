@@ -13,7 +13,7 @@ from app.cloud.interfaces import (
     UserCredentials,
 )
 from app.config import get_settings
-from app.tracing import Session
+from app.tracing import Session, FunctionTrace
 
 
 class StaticTokenCredential:
@@ -83,10 +83,7 @@ class AzureKeyVaultProvider(SecretProvider):
         """Store a secret in Azure Key Vault."""
         secret_name = self._get_secret_name(user_id, name)
 
-        if session:
-            session.log("Storing secret", name=name, secret_name=secret_name)
-
-        try:
+        with FunctionTrace(session, "Storing secret", name=name, secret_name=secret_name) as trace:
             # Set the secret with tags for organization
             secret = self.client.set_secret(
                 secret_name,
@@ -98,19 +95,9 @@ class AzureKeyVaultProvider(SecretProvider):
                 },
             )
 
-            if session:
-                session.log("Secret stored", secret_name=secret_name)
+            trace.log("Secret stored", secret_name=secret_name)
 
             return secret.id  # Returns full URL to the secret
-        except Exception as e:
-            if session:
-                session.log(
-                    "Secret storage failed",
-                    secret_name=secret_name,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
 
     async def get_secret(
         self, secret_ref: str, session: Session | None = None
@@ -118,20 +105,10 @@ class AzureKeyVaultProvider(SecretProvider):
         """Retrieve a secret value from Azure Key Vault."""
         secret_name = self._parse_secret_ref(secret_ref)
 
-        try:
+        with FunctionTrace(session, "Retrieving secret", secret_name=secret_name) as trace:
             secret = self.client.get_secret(secret_name)
-            if session:
-                session.log("Secret retrieved", secret_name=secret_name)
+            trace.log("Secret retrieved", secret_name=secret_name)
             return secret.value
-        except Exception as e:
-            if session:
-                session.log(
-                    "Secret retrieval failed",
-                    secret_name=secret_name,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
 
     async def delete_secret(
         self, secret_ref: str, session: Session | None = None
@@ -143,31 +120,18 @@ class AzureKeyVaultProvider(SecretProvider):
         """
         secret_name = self._parse_secret_ref(secret_ref)
 
-        if session:
-            session.log("Deleting secret", secret_name=secret_name)
-
-        try:
+        with FunctionTrace(session, "Deleting secret", secret_name=secret_name) as trace:
             # Begin deletion
             poller = self.client.begin_delete_secret(secret_name)
             poller.result()
 
-            if session:
-                session.log("Secret deleted", secret_name=secret_name)
-        except Exception as e:
-            if session:
-                session.log(
-                    "Secret deletion failed",
-                    secret_name=secret_name,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
+            trace.log("Secret deleted", secret_name=secret_name)
 
     async def list_secrets(
         self, user_id: str, session: Session | None = None
     ) -> list[SecretMetadata]:
         """List all secrets for a user."""
-        try:
+        with FunctionTrace(session, "Listing secrets", user_id=user_id) as trace:
             secrets = []
             user_id_clean = user_id.replace("-", "")
 
@@ -191,18 +155,9 @@ class AzureKeyVaultProvider(SecretProvider):
                         )
                     )
 
-            if session:
-                session.log("Secrets listed", count=len(secrets))
+            trace.log("Secrets listed", count=len(secrets))
 
             return secrets
-        except Exception as e:
-            if session:
-                session.log(
-                    "Secret listing failed",
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
 
     async def update_secret(
         self, secret_ref: str, value: str, session: Session | None = None
@@ -210,10 +165,7 @@ class AzureKeyVaultProvider(SecretProvider):
         """Update a secret's value by setting a new version."""
         secret_name = self._parse_secret_ref(secret_ref)
 
-        if session:
-            session.log("Updating secret", secret_name=secret_name)
-
-        try:
+        with FunctionTrace(session, "Updating secret", secret_name=secret_name) as trace:
             # Get existing secret to preserve tags
             try:
                 existing = self.client.get_secret(secret_name)
@@ -224,14 +176,4 @@ class AzureKeyVaultProvider(SecretProvider):
             # Set new value (creates new version)
             self.client.set_secret(secret_name, value, tags=tags)
 
-            if session:
-                session.log("Secret updated", secret_name=secret_name)
-        except Exception as e:
-            if session:
-                session.log(
-                    "Secret update failed",
-                    secret_name=secret_name,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
+            trace.log("Secret updated", secret_name=secret_name)

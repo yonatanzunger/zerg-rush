@@ -10,7 +10,7 @@ from app.cloud.interfaces import (
     TokenResponse,
 )
 from app.config import get_settings
-from app.tracing import Session
+from app.tracing import Session, FunctionTrace
 
 
 class AzureADIdentityProvider(IdentityProvider):
@@ -73,10 +73,7 @@ class AzureADIdentityProvider(IdentityProvider):
         self, code: str, redirect_uri: str, session: Session | None = None
     ) -> TokenResponse:
         """Exchange authorization code for tokens."""
-        if session:
-            session.log("Exchanging authorization code for tokens")
-
-        try:
+        with FunctionTrace(session, "Exchanging authorization code for tokens") as trace:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     self.token_url,
@@ -92,8 +89,7 @@ class AzureADIdentityProvider(IdentityProvider):
                 response.raise_for_status()
                 data = response.json()
 
-            if session:
-                session.log("Token exchange successful")
+            trace.log("Token exchange successful")
 
             return TokenResponse(
                 access_token=data["access_token"],
@@ -101,14 +97,6 @@ class AzureADIdentityProvider(IdentityProvider):
                 expires_in=data["expires_in"],
                 token_type=data.get("token_type", "Bearer"),
             )
-        except Exception as e:
-            if session:
-                session.log(
-                    "Token exchange failed",
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
 
     async def verify_token(
         self, token: str, session: Session | None = None
@@ -117,10 +105,7 @@ class AzureADIdentityProvider(IdentityProvider):
 
         Uses Microsoft Graph API to get user information.
         """
-        if session:
-            session.log("Verifying token via Microsoft Graph API")
-
-        try:
+        with FunctionTrace(session, "Verifying token via Microsoft Graph API") as trace:
             async with httpx.AsyncClient() as client:
                 response = await client.get(
                     self.graph_url,
@@ -129,8 +114,7 @@ class AzureADIdentityProvider(IdentityProvider):
                 response.raise_for_status()
                 data = response.json()
 
-            if session:
-                session.log("Token verified successfully")
+            trace.log("Token verified successfully")
 
             # Microsoft Graph returns different field names
             return UserInfo(
@@ -139,14 +123,6 @@ class AzureADIdentityProvider(IdentityProvider):
                 name=data.get("displayName", data.get("userPrincipalName", "")),
                 picture=None,  # Graph API requires separate call for photo
             )
-        except Exception as e:
-            if session:
-                session.log(
-                    "Token verification failed",
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
 
     async def refresh_token(
         self, refresh_token: str, session: Session | None = None
@@ -166,10 +142,7 @@ class AzureADIdentityProvider(IdentityProvider):
         - STORAGE_SCOPE for blob storage
         - KEYVAULT_SCOPE for Key Vault
         """
-        if session:
-            session.log("Refreshing token for scope", scope=scope)
-
-        try:
+        with FunctionTrace(session, "Refreshing token for scope", scope=scope) as trace:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     self.token_url,
@@ -184,8 +157,7 @@ class AzureADIdentityProvider(IdentityProvider):
                 response.raise_for_status()
                 data = response.json()
 
-            if session:
-                session.log("Token refreshed successfully", scope=scope)
+            trace.log("Token refreshed successfully", scope=scope)
 
             return TokenResponse(
                 access_token=data["access_token"],
@@ -193,12 +165,3 @@ class AzureADIdentityProvider(IdentityProvider):
                 expires_in=data["expires_in"],
                 token_type=data.get("token_type", "Bearer"),
             )
-        except Exception as e:
-            if session:
-                session.log(
-                    "Token refresh failed",
-                    scope=scope,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise

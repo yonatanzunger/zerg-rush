@@ -22,7 +22,7 @@ from app.cloud.interfaces import (
     UserCredentials,
 )
 from app.config import get_settings
-from app.tracing import Session
+from app.tracing import Session, FunctionTrace
 
 
 class StaticTokenCredential:
@@ -82,10 +82,9 @@ class AzureBlobStorageProvider(StorageProvider):
         """Create a new Azure Blob container."""
         container_name = self._get_container_name(name, user_id)
 
-        if session:
-            session.log("Creating Azure Blob container", name=name, container_name=container_name)
-
-        try:
+        with FunctionTrace(
+            session, "Creating Azure Blob container", name=name, container_name=container_name
+        ) as trace:
             container_client = self.client.get_container_client(container_name)
 
             # Create the container with metadata
@@ -96,28 +95,15 @@ class AzureBlobStorageProvider(StorageProvider):
                 }
             )
 
-            if session:
-                session.log("Azure Blob container created", container_name=container_name)
+            trace.log("Azure Blob container created", container_name=container_name)
 
             return container_name
-        except Exception as e:
-            if session:
-                session.log(
-                    "Azure Blob container creation failed",
-                    container_name=container_name,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
 
     async def delete_bucket(
         self, bucket_id: str, session: Session | None = None
     ) -> None:
         """Delete an Azure Blob container and all its contents."""
-        if session:
-            session.log("Deleting Azure Blob container", bucket_id=bucket_id)
-
-        try:
+        with FunctionTrace(session, "Deleting Azure Blob container", bucket_id=bucket_id) as trace:
             container_client = self.client.get_container_client(bucket_id)
 
             # Delete all blobs first
@@ -128,17 +114,7 @@ class AzureBlobStorageProvider(StorageProvider):
             # Delete the container
             container_client.delete_container()
 
-            if session:
-                session.log("Azure Blob container deleted", bucket_id=bucket_id)
-        except Exception as e:
-            if session:
-                session.log(
-                    "Azure Blob container deletion failed",
-                    bucket_id=bucket_id,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
+            trace.log("Azure Blob container deleted", bucket_id=bucket_id)
 
     async def create_scoped_credentials(
         self,
@@ -150,10 +126,7 @@ class AzureBlobStorageProvider(StorageProvider):
 
         This creates a SAS token with limited permissions.
         """
-        if session:
-            session.log("Creating scoped credentials", bucket_id=bucket_id)
-
-        try:
+        with FunctionTrace(session, "Creating scoped credentials", bucket_id=bucket_id) as trace:
             # Default permissions: read/write to the container
             if permissions is None:
                 sas_permissions = ContainerSasPermissions(
@@ -197,28 +170,18 @@ class AzureBlobStorageProvider(StorageProvider):
                 }
             )
 
-            if session:
-                session.log("Scoped credentials created", bucket_id=bucket_id)
+            trace.log("Scoped credentials created", bucket_id=bucket_id)
 
             return ScopedCredentials(
                 credentials_json=creds_json,
                 expires_at=expiry,
             )
-        except Exception as e:
-            if session:
-                session.log(
-                    "Scoped credentials creation failed",
-                    bucket_id=bucket_id,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
 
     async def list_objects(
         self, bucket_id: str, prefix: str = "", session: Session | None = None
     ) -> list[StorageObject]:
         """List objects in an Azure Blob container."""
-        try:
+        with FunctionTrace(session, "Listing Azure Blob objects", bucket_id=bucket_id, prefix=prefix) as trace:
             container_client = self.client.get_container_client(bucket_id)
 
             objects = []
@@ -236,82 +199,40 @@ class AzureBlobStorageProvider(StorageProvider):
                     )
                 )
 
+            trace.log("Objects listed", count=len(objects))
             return objects
-        except Exception as e:
-            if session:
-                session.log(
-                    "List objects failed",
-                    bucket_id=bucket_id,
-                    prefix=prefix,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
 
     async def upload_object(
         self, bucket_id: str, key: str, data: bytes, session: Session | None = None
     ) -> None:
         """Upload an object to an Azure Blob container."""
-        try:
+        with FunctionTrace(session, "Uploading Azure Blob object", bucket_id=bucket_id, key=key) as trace:
             container_client = self.client.get_container_client(bucket_id)
             blob_client = container_client.get_blob_client(key)
             blob_client.upload_blob(data, overwrite=True)
-            if session:
-                session.log("Object uploaded", bucket_id=bucket_id, key=key, size=len(data))
-        except Exception as e:
-            if session:
-                session.log(
-                    "Object upload failed",
-                    bucket_id=bucket_id,
-                    key=key,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
+            trace.log("Object uploaded", bucket_id=bucket_id, key=key, size=len(data))
 
     async def download_object(
         self, bucket_id: str, key: str, session: Session | None = None
     ) -> bytes:
         """Download an object from an Azure Blob container."""
-        try:
+        with FunctionTrace(session, "Downloading Azure Blob object", bucket_id=bucket_id, key=key) as trace:
             container_client = self.client.get_container_client(bucket_id)
             blob_client = container_client.get_blob_client(key)
             download_stream = blob_client.download_blob()
             data = download_stream.readall()
-            if session:
-                session.log("Object downloaded", bucket_id=bucket_id, key=key, size=len(data))
+            trace.log("Object downloaded", bucket_id=bucket_id, key=key, size=len(data))
             return data
-        except Exception as e:
-            if session:
-                session.log(
-                    "Object download failed",
-                    bucket_id=bucket_id,
-                    key=key,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
 
     async def delete_object(
         self, bucket_id: str, key: str, session: Session | None = None
     ) -> None:
         """Delete an object from an Azure Blob container."""
-        try:
+        with FunctionTrace(session, "Deleting Azure Blob object", bucket_id=bucket_id, key=key) as trace:
             container_client = self.client.get_container_client(bucket_id)
             blob_client = container_client.get_blob_client(key)
             blob_client.delete_blob()
-            if session:
-                session.log("Object deleted", bucket_id=bucket_id, key=key)
-        except Exception as e:
-            if session:
-                session.log(
-                    "Object deletion failed",
-                    bucket_id=bucket_id,
-                    key=key,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
+            trace.log("Object deleted", bucket_id=bucket_id, key=key)
 
     async def get_signed_url(
         self,
@@ -321,7 +242,7 @@ class AzureBlobStorageProvider(StorageProvider):
         session: Session | None = None,
     ) -> str:
         """Get a signed URL for an object."""
-        try:
+        with FunctionTrace(session, "Generating signed URL", bucket_id=bucket_id, key=key) as trace:
             expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
 
             # Generate a User Delegation Key
@@ -340,17 +261,6 @@ class AzureBlobStorageProvider(StorageProvider):
                 expiry=expiry,
             )
 
-            if session:
-                session.log("Signed URL generated", bucket_id=bucket_id, key=key)
+            trace.log("Signed URL generated", bucket_id=bucket_id, key=key)
 
             return f"{self.account_url}/{bucket_id}/{key}?{sas_token}"
-        except Exception as e:
-            if session:
-                session.log(
-                    "Signed URL generation failed",
-                    bucket_id=bucket_id,
-                    key=key,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                )
-            raise
