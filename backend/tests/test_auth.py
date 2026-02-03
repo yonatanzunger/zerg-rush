@@ -37,6 +37,27 @@ class TestLogin(AsyncTestCase):
         response = await self.client.get("/auth/login", follow_redirects=False)
         self.assertIn("oauth_state", response.cookies)
 
+    async def test_login_rejects_arbitrary_redirect_uri(self):
+        """Test that login rejects redirect URIs not in the whitelist."""
+        response = await self.client.get(
+            "/auth/login",
+            params={"redirect_uri": "https://evil.com/steal-tokens"},
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 400)
+        data = response.json()
+        self.assertIn("not in the allowed list", data["detail"])
+
+    async def test_login_accepts_default_redirect_uri(self):
+        """Test that login accepts the default redirect URI."""
+        settings = get_settings()
+        response = await self.client.get(
+            "/auth/login",
+            params={"redirect_uri": settings.oauth_redirect_uri},
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 307)
+
 
 class TestOAuthCallback(AsyncTestCase):
     """Tests for OAuth callback handling."""

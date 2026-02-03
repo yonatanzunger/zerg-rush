@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     google_client_secret: str | None = None
     oauth_redirect_uri: str = "http://localhost:8000/auth/callback"
 
+    # Allowed OAuth redirect URIs (whitelist for security)
+    # Comma-separated list of allowed redirect URIs
+    # If empty, only oauth_redirect_uri is allowed
+    allowed_oauth_redirect_uris: str = ""
+
     # Frontend
     frontend_url: str = "http://localhost:3000"
 

@@ -25,6 +25,46 @@ router = APIRouter()
 settings = get_settings()
 
 
+def get_allowed_redirect_uris() -> set[str]:
+    """Get the set of allowed OAuth redirect URIs.
+
+    Returns:
+        Set of allowed redirect URIs, always includes the default oauth_redirect_uri.
+    """
+    allowed = {settings.oauth_redirect_uri}
+    if settings.allowed_oauth_redirect_uris:
+        # Parse comma-separated list and add to allowed set
+        for uri in settings.allowed_oauth_redirect_uris.split(","):
+            uri = uri.strip()
+            if uri:
+                allowed.add(uri)
+    return allowed
+
+
+def validate_redirect_uri(redirect_uri: str | None) -> str:
+    """Validate and return a safe redirect URI.
+
+    Args:
+        redirect_uri: The requested redirect URI, or None to use default.
+
+    Returns:
+        A validated redirect URI from the whitelist.
+
+    Raises:
+        HTTPException: If the redirect URI is not in the whitelist.
+    """
+    if redirect_uri is None:
+        return settings.oauth_redirect_uri
+
+    allowed = get_allowed_redirect_uris()
+    if redirect_uri not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid redirect_uri. The provided URI is not in the allowed list.",
+        )
+    return redirect_uri
+
+
 class TokenResponse(BaseModel):
     """JWT token response."""
 
@@ -66,8 +106,8 @@ async def login(
     """Initiate OAuth login flow."""
     providers = get_providers()
 
-    # Use provided redirect URI or default
-    callback_uri = redirect_uri or settings.oauth_redirect_uri
+    # Validate redirect URI against whitelist
+    callback_uri = validate_redirect_uri(redirect_uri)
 
     # Generate state for CSRF protection
     state = str(uuid4())
