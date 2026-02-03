@@ -1,40 +1,46 @@
 <#
 .SYNOPSIS
-    Starts the Zerg Rush backend server locally.
+    Starts the Zerg Rush backend and frontend servers locally.
 
 .DESCRIPTION
     This script sets up the Python virtual environment, installs dependencies,
-    and starts the FastAPI backend server using uvicorn.
+    starts the FastAPI backend server using uvicorn, and also starts the
+    frontend Vite development server.
 
 .PARAMETER Port
-    The port to run the server on. Defaults to 8000.
+    The port to run the backend server on. Defaults to 8000.
+
+.PARAMETER FrontendPort
+    The port to run the frontend server on. Defaults to 3000.
 
 .PARAMETER Hostname
     The host to bind to. Defaults to 127.0.0.1.
 
-.PARAMETER Reload
-    Enable auto-reload on code changes. Enabled by default.
-
 .PARAMETER NoReload
-    Disable auto-reload.
+    Disable auto-reload for the backend.
+
+.PARAMETER NoFrontend
+    Skip starting the frontend server.
 
 .EXAMPLE
     .\start-server.ps1
-    Starts the server on http://127.0.0.1:8000 with auto-reload.
+    Starts backend on http://127.0.0.1:8000 and frontend on http://127.0.0.1:3000.
 
 .EXAMPLE
-    .\start-server.ps1 -Port 8080
-    Starts the server on port 8080.
+    .\start-server.ps1 -Port 8080 -FrontendPort 3001
+    Starts backend on port 8080 and frontend on port 3001.
 
 .EXAMPLE
-    .\start-server.ps1 -Hostname 0.0.0.0 -NoReload
-    Starts the server on all interfaces without auto-reload.
+    .\start-server.ps1 -NoFrontend
+    Starts only the backend server.
 #>
 
 param(
     [int]$Port = 8000,
+    [int]$FrontendPort = 3000,
     [string]$Hostname = "127.0.0.1",
-    [switch]$NoReload
+    [switch]$NoReload,
+    [switch]$NoFrontend
 )
 
 $ErrorActionPreference = "Stop"
@@ -74,6 +80,9 @@ $venvPython = Join-Path $venvDir "Scripts\python.exe"
 $requirementsFile = Join-Path $backendDir "requirements.txt"
 $envFile = Join-Path $backendDir ".env"
 $envExampleFile = Join-Path $backendDir ".env.example"
+
+$frontendDir = Join-Path $ProjectRoot "frontend"
+$nodeModulesDir = Join-Path $frontendDir "node_modules"
 
 # Check if .env exists
 if (-not (Test-Path $envFile)) {
@@ -203,6 +212,43 @@ if ($LASTEXITCODE -ne 0) {
     Write-Success "Dependencies installed"
 }
 
+# Frontend setup
+$frontendJob = $null
+if (-not $NoFrontend) {
+    # Check if npm is available
+    $npmAvailable = $null -ne (Get-Command npm -ErrorAction SilentlyContinue)
+    if (-not $npmAvailable) {
+        Write-Warning "npm is not installed or not in PATH"
+        Write-Warning "Skipping frontend startup. Install Node.js to enable frontend."
+    }
+    else {
+        # Check if node_modules exists
+        if (-not (Test-Path $nodeModulesDir)) {
+            Write-Status "Installing frontend dependencies..."
+            Push-Location $frontendDir
+            try {
+                npm install
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Failure "Failed to install frontend dependencies"
+                    exit 1
+                }
+                Write-Success "Frontend dependencies installed"
+            }
+            finally {
+                Pop-Location
+            }
+        }
+
+        # Start frontend dev server as a background job
+        Write-Status "Starting frontend dev server on http://${Hostname}:${FrontendPort}"
+        $frontendJob = Start-Job -ScriptBlock {
+            param($dir, $port)
+            Set-Location $dir
+            npm run dev -- --port $port
+        } -ArgumentList $frontendDir, $FrontendPort
+    }
+}
+
 # Build uvicorn command
 $uvicornArgs = @(
     "-m", "uvicorn",
@@ -217,8 +263,11 @@ if (-not $NoReload) {
 
 # Start the server
 Write-Host ""
-Write-Status "Starting server on http://${Hostname}:${Port}"
+Write-Status "Starting backend server on http://${Hostname}:${Port}"
 Write-Status "API docs available at http://${Hostname}:${Port}/docs"
+if ($frontendJob) {
+    Write-Status "Frontend running on http://${Hostname}:${FrontendPort}"
+}
 Write-Host ""
 
 Push-Location $backendDir
@@ -227,4 +276,10 @@ try {
 }
 finally {
     Pop-Location
+    # Clean up frontend job when backend exits
+    if ($frontendJob) {
+        Write-Status "Stopping frontend server..."
+        Stop-Job -Job $frontendJob -ErrorAction SilentlyContinue
+        Remove-Job -Job $frontendJob -ErrorAction SilentlyContinue
+    }
 }

@@ -84,19 +84,19 @@ export interface AuditLog {
 }
 
 // API Response types
-export interface ListResponse<T> {
+export interface ListResponse {
   total: number
 }
 
-export interface AgentListResponse extends ListResponse<Agent> {
+export interface AgentListResponse extends ListResponse {
   agents: Agent[]
 }
 
-export interface SavedAgentListResponse extends ListResponse<SavedAgent> {
+export interface SavedAgentListResponse extends ListResponse {
   saved_agents: SavedAgent[]
 }
 
-export interface CredentialListResponse extends ListResponse<Credential> {
+export interface CredentialListResponse extends ListResponse {
   credentials: Credential[]
 }
 

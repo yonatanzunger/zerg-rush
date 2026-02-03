@@ -3,7 +3,8 @@
     "allow": [
       "WebFetch(domain:docs.google.com)",
       "Bash(python -m venv:*)",
-      "Bash(powershell -ExecutionPolicy Bypass -File scripts/run-tests.ps1:*)"
+      "Bash(powershell -ExecutionPolicy Bypass -File scripts/run-tests.ps1:*)",
+      "Bash(dir:*)"
     ]
   }
 }
