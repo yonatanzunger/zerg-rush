@@ -32,6 +32,7 @@ See `.clarity-protocol/solution/architecture.md` for detailed information about 
 - When updating models, ensure database migrations are included if needed
 - When adding new functionality, make sure you update the README
 - Make sure all guidance in the Copilot Instructions file is updated with any relevant changes, including to project structure and scripts, and programming guidance
+- Update any relevant files in .clarity-protocol to ensure they reflect the current state of the project
 
 ### Code formatting requirements
 
