@@ -72,6 +72,35 @@ Zerg Rush is a control panel for securely managing fleets of AI agents (starting
    - Backend API: http://localhost:8000
    - API docs: http://localhost:8000/docs
 
+### Using the Start Script (Windows)
+
+The easiest way to start the backend server locally:
+
+```powershell
+.\scripts\start-server.ps1
+```
+
+This script automatically:
+- Starts a PostgreSQL Docker container (`zergrush-db`) if Docker is available
+- Waits for PostgreSQL to be ready and creates the database if needed
+- Creates a Python virtual environment if needed
+- Installs dependencies
+- Copies `.env.example` to `.env` if no `.env` exists
+- Starts the server with auto-reload enabled
+
+**Prerequisites:**
+- Docker Desktop (for automatic PostgreSQL management)
+- Python 3.x
+
+**Options:**
+```powershell
+.\scripts\start-server.ps1 -Port 8080           # Use a different port
+.\scripts\start-server.ps1 -Hostname 0.0.0.0    # Bind to all interfaces
+.\scripts\start-server.ps1 -NoReload            # Disable auto-reload
+```
+
+> **Note:** If Docker is not available, you'll need to run PostgreSQL manually on `localhost:5432` with a database named `zergrush`.
+
 ### Manual Setup (without Docker)
 
 **Backend:**
