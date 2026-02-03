@@ -118,7 +118,7 @@ class GCPVMProvider(VMProvider):
         if config.startup_script:
             metadata = compute_v1.Metadata()
             metadata.items = [
-                compute_v1.Items(key="startup-script", value=config.startup_script)
+                {"key": "startup-script", "value": config.startup_script}
             ]
             instance.metadata = metadata
 
