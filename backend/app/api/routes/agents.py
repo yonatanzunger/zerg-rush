@@ -26,6 +26,7 @@ from app.api.dependencies import (
 from app.cloud.factory import get_providers, CloudProviders
 from app.cloud.interfaces import VMConfig, VMStatus
 from app.config import get_settings
+from app.db.session import AsyncSessionLocal
 from app.models import ActiveAgent, SavedAgent, Credential, AgentCredential
 from app.tracing import ActiveSession
 
@@ -658,7 +659,6 @@ async def _stream_events(
 async def create_agent_streaming(
     request: Request,
     current_user: CurrentUser,
-    db: DbSession,
     providers: UserCloudProviders,
     body: CreateAgentRequest,
     session: StreamingSession,
@@ -671,6 +671,9 @@ async def create_agent_streaming(
     - type: "error" with error details
     """
     session.set_user(current_user)
+    # Capture values needed in background task
+    user_id = current_user.id
+    client_ip = get_client_ip(request)
 
     async def run_creation() -> None:
         """Run the agent creation and emit events."""
@@ -682,146 +685,149 @@ async def create_agent_streaming(
         vm_name = f"zr-agent-{agent_id[:8]}"
         bucket_name = f"agent-{agent_id[:8]}"
 
-        try:
-            session.log("Starting agent creation", name=body.name)
+        # Create a new database session for this background task
+        async with AsyncSessionLocal() as db:
+            try:
+                session.log("Starting agent creation", name=body.name)
 
-            # Validate template if specified
-            template = None
-            if body.template_id:
-                with session.span("Validate template"):
-                    result = await db.execute(
-                        select(SavedAgent).where(
-                            SavedAgent.id == body.template_id,
-                            SavedAgent.user_id == current_user.id,
+                # Validate template if specified
+                template = None
+                if body.template_id:
+                    with session.span("Validate template"):
+                        result = await db.execute(
+                            select(SavedAgent).where(
+                                SavedAgent.id == body.template_id,
+                                SavedAgent.user_id == user_id,
+                            )
                         )
-                    )
-                    template = result.scalar_one_or_none()
-                    if not template:
-                        raise ValueError("Template not found")
-                    session.log("Template validated", template_id=body.template_id)
+                        template = result.scalar_one_or_none()
+                        if not template:
+                            raise ValueError("Template not found")
+                        session.log("Template validated", template_id=body.template_id)
 
-            # Validate credentials
-            if body.credential_ids:
-                with session.span("Validate credentials"):
-                    result = await db.execute(
-                        select(Credential).where(
-                            Credential.id.in_(body.credential_ids),
-                            Credential.user_id == current_user.id,
+                # Validate credentials
+                if body.credential_ids:
+                    with session.span("Validate credentials"):
+                        result = await db.execute(
+                            select(Credential).where(
+                                Credential.id.in_(body.credential_ids),
+                                Credential.user_id == user_id,
+                            )
                         )
+                        credentials = result.scalars().all()
+                        if len(credentials) != len(body.credential_ids):
+                            raise ValueError("One or more credentials not found")
+                        session.log("Credentials validated", count=len(credentials))
+
+                # Create storage bucket
+                bucket_id = None
+                with session.span("Create storage bucket"):
+                    try:
+                        session.log("Provisioning cloud storage...")
+                        bucket_id = await providers.storage.create_bucket(
+                            name=bucket_name,
+                            user_id=user_id,
+                            session=session,
+                        )
+                        session.log("Storage bucket created", bucket_id=bucket_id)
+                    except Exception as e:
+                        raise ValueError(f"Failed to create storage bucket: {str(e)}")
+
+                # Create VM
+                vm_instance = None
+                with session.span("Create VM"):
+                    try:
+                        session.log("Provisioning virtual machine...")
+                        vm_config = VMConfig(
+                            name=vm_name,
+                            size=vm_size,
+                            image="default",
+                            user_id=user_id,
+                            agent_id=agent_id,
+                            startup_script=get_platform(body.platform_type).get_startup_script(current_user),
+                        )
+                        vm_instance = await providers.vm.create_vm(vm_config, session=session)
+                        session.log("VM created successfully", vm_id=vm_instance.vm_id)
+                    except Exception as e:
+                        # Clean up bucket on failure
+                        session.log("VM creation failed, cleaning up bucket", error=str(e))
+                        if bucket_id:
+                            try:
+                                await providers.storage.delete_bucket(bucket_id, session=session)
+                            except Exception:
+                                pass
+                        raise ValueError(f"Failed to create VM: {str(e)}")
+
+                # Create agent record
+                with session.span("Save agent record"):
+                    agent = ActiveAgent(
+                        id=agent_id,
+                        user_id=user_id,
+                        name=body.name,
+                        vm_id=vm_instance.vm_id,
+                        vm_size=vm_size,
+                        vm_status=vm_instance.status.value,
+                        vm_internal_ip=vm_instance.internal_ip,
+                        bucket_id=bucket_id,
+                        platform_type=body.platform_type,
+                        template_id=body.template_id,
                     )
-                    credentials = result.scalars().all()
-                    if len(credentials) != len(body.credential_ids):
-                        raise ValueError("One or more credentials not found")
-                    session.log("Credentials validated", count=len(credentials))
+                    db.add(agent)
 
-            # Create storage bucket
-            bucket_id = None
-            with session.span("Create storage bucket"):
-                try:
-                    session.log("Provisioning cloud storage...")
-                    bucket_id = await providers.storage.create_bucket(
-                        name=bucket_name,
-                        user_id=current_user.id,
-                        session=session,
+                    # Grant credentials to agent
+                    for cred_id in body.credential_ids:
+                        agent_cred = AgentCredential(
+                            agent_id=agent_id,
+                            credential_id=cred_id,
+                        )
+                        db.add(agent_cred)
+
+                    # Log action
+                    await log_action(
+                        db=db,
+                        user_id=user_id,
+                        action_type="agent.create",
+                        target_type="agent",
+                        target_id=agent_id,
+                        details={
+                            "name": body.name,
+                            "platform_type": body.platform_type,
+                            "vm_size": vm_size,
+                            "template_id": body.template_id,
+                        },
+                        ip_address=client_ip,
                     )
-                    session.log("Storage bucket created", bucket_id=bucket_id)
-                except Exception as e:
-                    raise ValueError(f"Failed to create storage bucket: {str(e)}")
 
-            # Create VM
-            vm_instance = None
-            with session.span("Create VM"):
-                try:
-                    session.log("Provisioning virtual machine...")
-                    vm_config = VMConfig(
-                        name=vm_name,
-                        size=vm_size,
-                        image="default",
-                        user_id=current_user.id,
-                        agent_id=agent_id,
-                        startup_script=get_platform(body.platform_type).get_startup_script(current_user),
-                    )
-                    vm_instance = await providers.vm.create_vm(vm_config, session=session)
-                    session.log("VM created successfully", vm_id=vm_instance.vm_id)
-                except Exception as e:
-                    # Clean up bucket on failure
-                    session.log("VM creation failed, cleaning up bucket", error=str(e))
-                    if bucket_id:
-                        try:
-                            await providers.storage.delete_bucket(bucket_id, session=session)
-                        except Exception:
-                            pass
-                    raise ValueError(f"Failed to create VM: {str(e)}")
+                    await db.commit()
+                    await db.refresh(agent)
+                    session.log("Agent record saved")
 
-            # Create agent record
-            with session.span("Save agent record"):
-                agent = ActiveAgent(
-                    id=agent_id,
-                    user_id=current_user.id,
-                    name=body.name,
-                    vm_id=vm_instance.vm_id,
-                    vm_size=vm_size,
-                    vm_status=vm_instance.status.value,
-                    vm_internal_ip=vm_instance.internal_ip,
-                    bucket_id=bucket_id,
-                    platform_type=body.platform_type,
-                    template_id=body.template_id,
-                )
-                db.add(agent)
-
-                # Grant credentials to agent
-                for cred_id in body.credential_ids:
-                    agent_cred = AgentCredential(
-                        agent_id=agent_id,
-                        credential_id=cred_id,
-                    )
-                    db.add(agent_cred)
-
-                # Log action
-                await log_action(
-                    db=db,
-                    user_id=current_user.id,
-                    action_type="agent.create",
-                    target_type="agent",
-                    target_id=agent_id,
-                    details={
-                        "name": body.name,
-                        "platform_type": body.platform_type,
-                        "vm_size": vm_size,
-                        "template_id": body.template_id,
+                # Emit completion event with agent data
+                session.emit_completion(
+                    message="Agent created successfully",
+                    data={
+                        "agent": {
+                            "id": agent.id,
+                            "name": agent.name,
+                            "vm_id": agent.vm_id,
+                            "vm_size": agent.vm_size,
+                            "vm_status": agent.vm_status,
+                            "vm_internal_ip": agent.vm_internal_ip,
+                            "bucket_id": agent.bucket_id,
+                            "current_task": agent.current_task,
+                            "platform_type": agent.platform_type,
+                            "platform_version": agent.platform_version,
+                            "template_id": agent.template_id,
+                            "gateway_port": agent.gateway_port,
+                            "created_at": agent.created_at.isoformat(),
+                            "updated_at": agent.updated_at.isoformat(),
+                        }
                     },
-                    ip_address=get_client_ip(request),
                 )
 
-                await db.commit()
-                await db.refresh(agent)
-                session.log("Agent record saved")
-
-            # Emit completion event with agent data
-            session.emit_completion(
-                message="Agent created successfully",
-                data={
-                    "agent": {
-                        "id": agent.id,
-                        "name": agent.name,
-                        "vm_id": agent.vm_id,
-                        "vm_size": agent.vm_size,
-                        "vm_status": agent.vm_status,
-                        "vm_internal_ip": agent.vm_internal_ip,
-                        "bucket_id": agent.bucket_id,
-                        "current_task": agent.current_task,
-                        "platform_type": agent.platform_type,
-                        "platform_version": agent.platform_version,
-                        "template_id": agent.template_id,
-                        "gateway_port": agent.gateway_port,
-                        "created_at": agent.created_at.isoformat(),
-                        "updated_at": agent.updated_at.isoformat(),
-                    }
-                },
-            )
-
-        except Exception as e:
-            session.finish_streaming(error=str(e))
+            except Exception as e:
+                await db.rollback()
+                session.finish_streaming(error=str(e))
 
     # Start the creation task
     task = asyncio.create_task(run_creation())
@@ -841,7 +847,6 @@ async def create_agent_streaming(
 async def delete_agent_streaming(
     request: Request,
     current_user: CurrentUser,
-    db: DbSession,
     providers: UserCloudProviders,
     agent_id: str,
     session: StreamingSession,
@@ -851,67 +856,73 @@ async def delete_agent_streaming(
     Returns Server-Sent Events (SSE) with progress updates during deletion.
     """
     session.set_user(current_user)
+    # Capture values needed in background task
+    user_id = current_user.id
+    client_ip = get_client_ip(request)
 
     async def run_deletion() -> None:
         """Run the agent deletion and emit events."""
-        try:
-            session.log("Starting agent deletion", agent_id=agent_id)
+        # Create a new database session for this background task
+        async with AsyncSessionLocal() as db:
+            try:
+                session.log("Starting agent deletion", agent_id=agent_id)
 
-            result = await db.execute(
-                select(ActiveAgent).where(
-                    ActiveAgent.id == agent_id,
-                    ActiveAgent.user_id == current_user.id,
+                result = await db.execute(
+                    select(ActiveAgent).where(
+                        ActiveAgent.id == agent_id,
+                        ActiveAgent.user_id == user_id,
+                    )
                 )
-            )
-            agent = result.scalar_one_or_none()
+                agent = result.scalar_one_or_none()
 
-            if not agent:
-                raise ValueError("Agent not found")
+                if not agent:
+                    raise ValueError("Agent not found")
 
-            agent_name = agent.name
+                agent_name = agent.name
 
-            # Delete VM
-            with session.span("Delete VM"):
-                try:
-                    session.log("Terminating virtual machine...")
-                    await providers.vm.delete_vm(agent.vm_id, session=session)
-                    session.log("VM deleted")
-                except Exception as e:
-                    session.log("VM deletion failed (may already be deleted)", error=str(e))
+                # Delete VM
+                with session.span("Delete VM"):
+                    try:
+                        session.log("Terminating virtual machine...")
+                        await providers.vm.delete_vm(agent.vm_id, session=session)
+                        session.log("VM deleted")
+                    except Exception as e:
+                        session.log("VM deletion failed (may already be deleted)", error=str(e))
 
-            # Delete storage bucket
-            with session.span("Delete storage bucket"):
-                try:
-                    session.log("Removing storage bucket...")
-                    await providers.storage.delete_bucket(agent.bucket_id, session=session)
-                    session.log("Storage bucket deleted")
-                except Exception as e:
-                    session.log("Bucket deletion failed (may already be deleted)", error=str(e))
+                # Delete storage bucket
+                with session.span("Delete storage bucket"):
+                    try:
+                        session.log("Removing storage bucket...")
+                        await providers.storage.delete_bucket(agent.bucket_id, session=session)
+                        session.log("Storage bucket deleted")
+                    except Exception as e:
+                        session.log("Bucket deletion failed (may already be deleted)", error=str(e))
 
-            # Log action and delete from database
-            with session.span("Finalize deletion"):
-                await log_action(
-                    db=db,
-                    user_id=current_user.id,
-                    action_type="agent.delete",
-                    target_type="agent",
-                    target_id=agent_id,
-                    details={"name": agent_name},
-                    ip_address=get_client_ip(request),
+                # Log action and delete from database
+                with session.span("Finalize deletion"):
+                    await log_action(
+                        db=db,
+                        user_id=user_id,
+                        action_type="agent.delete",
+                        target_type="agent",
+                        target_id=agent_id,
+                        details={"name": agent_name},
+                        ip_address=client_ip,
+                    )
+
+                    await db.delete(agent)
+                    await db.commit()
+                    session.log("Agent record deleted")
+
+                # Emit completion event
+                session.emit_completion(
+                    message="Agent deleted successfully",
+                    data={"agent_id": agent_id},
                 )
 
-                await db.delete(agent)
-                await db.commit()
-                session.log("Agent record deleted")
-
-            # Emit completion event
-            session.emit_completion(
-                message="Agent deleted successfully",
-                data={"agent_id": agent_id},
-            )
-
-        except Exception as e:
-            session.finish_streaming(error=str(e))
+            except Exception as e:
+                await db.rollback()
+                session.finish_streaming(error=str(e))
 
     task = asyncio.create_task(run_deletion())
 
@@ -930,77 +941,82 @@ async def delete_agent_streaming(
 async def start_agent_streaming(
     request: Request,
     current_user: CurrentUser,
-    db: DbSession,
     providers: UserCloudProviders,
     agent_id: str,
     session: StreamingSession,
 ) -> StreamingResponse:
     """Start a stopped agent with streaming progress updates."""
     session.set_user(current_user)
+    # Capture values needed in background task
+    user_id = current_user.id
+    client_ip = get_client_ip(request)
 
     async def run_start() -> None:
-        try:
-            session.log("Starting agent", agent_id=agent_id)
+        # Create a new database session for this background task
+        async with AsyncSessionLocal() as db:
+            try:
+                session.log("Starting agent", agent_id=agent_id)
 
-            result = await db.execute(
-                select(ActiveAgent).where(
-                    ActiveAgent.id == agent_id,
-                    ActiveAgent.user_id == current_user.id,
+                result = await db.execute(
+                    select(ActiveAgent).where(
+                        ActiveAgent.id == agent_id,
+                        ActiveAgent.user_id == user_id,
+                    )
                 )
-            )
-            agent = result.scalar_one_or_none()
+                agent = result.scalar_one_or_none()
 
-            if not agent:
-                raise ValueError("Agent not found")
+                if not agent:
+                    raise ValueError("Agent not found")
 
-            if agent.vm_status not in [VMStatus.STOPPED.value, VMStatus.ERROR.value]:
-                raise ValueError(f"Agent cannot be started from status: {agent.vm_status}")
+                if agent.vm_status not in [VMStatus.STOPPED.value, VMStatus.ERROR.value]:
+                    raise ValueError(f"Agent cannot be started from status: {agent.vm_status}")
 
-            with session.span("Start VM"):
-                session.log("Starting virtual machine...")
-                await providers.vm.start_vm(agent.vm_id, session=session)
-                session.log("Waiting for VM to initialize...")
-                vm_instance = await providers.vm.get_vm_status(agent.vm_id, session=session)
-                agent.vm_status = vm_instance.status.value
-                agent.vm_internal_ip = vm_instance.internal_ip
-                session.log("VM started", status=agent.vm_status)
+                with session.span("Start VM"):
+                    session.log("Starting virtual machine...")
+                    await providers.vm.start_vm(agent.vm_id, session=session)
+                    session.log("Waiting for VM to initialize...")
+                    vm_instance = await providers.vm.get_vm_status(agent.vm_id, session=session)
+                    agent.vm_status = vm_instance.status.value
+                    agent.vm_internal_ip = vm_instance.internal_ip
+                    session.log("VM started", status=agent.vm_status)
 
-            await log_action(
-                db=db,
-                user_id=current_user.id,
-                action_type="agent.start",
-                target_type="agent",
-                target_id=agent_id,
-                ip_address=get_client_ip(request),
-            )
+                await log_action(
+                    db=db,
+                    user_id=user_id,
+                    action_type="agent.start",
+                    target_type="agent",
+                    target_id=agent_id,
+                    ip_address=client_ip,
+                )
 
-            await db.commit()
-            await db.refresh(agent)
+                await db.commit()
+                await db.refresh(agent)
 
-            session.emit_completion(
-                message="Agent started successfully",
-                data={
-                    "agent": {
-                        "id": agent.id,
-                        "name": agent.name,
-                        "vm_id": agent.vm_id,
-                        "vm_size": agent.vm_size,
-                        "vm_status": agent.vm_status,
-                        "vm_internal_ip": agent.vm_internal_ip,
-                        "bucket_id": agent.bucket_id,
-                        "current_task": agent.current_task,
-                        "platform_type": agent.platform_type,
-                        "platform_version": agent.platform_version,
-                        "template_id": agent.template_id,
-                        "gateway_port": agent.gateway_port,
-                        "created_at": agent.created_at.isoformat(),
-                        "updated_at": agent.updated_at.isoformat(),
-                    }
-                },
-            )
+                session.emit_completion(
+                    message="Agent started successfully",
+                    data={
+                        "agent": {
+                            "id": agent.id,
+                            "name": agent.name,
+                            "vm_id": agent.vm_id,
+                            "vm_size": agent.vm_size,
+                            "vm_status": agent.vm_status,
+                            "vm_internal_ip": agent.vm_internal_ip,
+                            "bucket_id": agent.bucket_id,
+                            "current_task": agent.current_task,
+                            "platform_type": agent.platform_type,
+                            "platform_version": agent.platform_version,
+                            "template_id": agent.template_id,
+                            "gateway_port": agent.gateway_port,
+                            "created_at": agent.created_at.isoformat(),
+                            "updated_at": agent.updated_at.isoformat(),
+                        }
+                    },
+                )
 
-        except Exception as e:
-            session.finish_streaming(error=str(e))
+            except Exception as e:
+                await db.rollback()
+                session.finish_streaming(error=str(e))
 
     task = asyncio.create_task(run_start())
 
@@ -1019,76 +1035,81 @@ async def start_agent_streaming(
 async def stop_agent_streaming(
     request: Request,
     current_user: CurrentUser,
-    db: DbSession,
     providers: UserCloudProviders,
     agent_id: str,
     session: StreamingSession,
 ) -> StreamingResponse:
     """Stop a running agent with streaming progress updates."""
     session.set_user(current_user)
+    # Capture values needed in background task
+    user_id = current_user.id
+    client_ip = get_client_ip(request)
 
     async def run_stop() -> None:
-        try:
-            session.log("Stopping agent", agent_id=agent_id)
+        # Create a new database session for this background task
+        async with AsyncSessionLocal() as db:
+            try:
+                session.log("Stopping agent", agent_id=agent_id)
 
-            result = await db.execute(
-                select(ActiveAgent).where(
-                    ActiveAgent.id == agent_id,
-                    ActiveAgent.user_id == current_user.id,
+                result = await db.execute(
+                    select(ActiveAgent).where(
+                        ActiveAgent.id == agent_id,
+                        ActiveAgent.user_id == user_id,
+                    )
                 )
-            )
-            agent = result.scalar_one_or_none()
+                agent = result.scalar_one_or_none()
 
-            if not agent:
-                raise ValueError("Agent not found")
+                if not agent:
+                    raise ValueError("Agent not found")
 
-            if agent.vm_status != VMStatus.RUNNING.value:
-                raise ValueError(f"Agent cannot be stopped from status: {agent.vm_status}")
+                if agent.vm_status != VMStatus.RUNNING.value:
+                    raise ValueError(f"Agent cannot be stopped from status: {agent.vm_status}")
 
-            with session.span("Stop VM"):
-                session.log("Stopping virtual machine...")
-                await providers.vm.stop_vm(agent.vm_id, session=session)
-                session.log("Waiting for VM to shut down...")
-                vm_instance = await providers.vm.get_vm_status(agent.vm_id, session=session)
-                agent.vm_status = vm_instance.status.value
-                session.log("VM stopped", status=agent.vm_status)
+                with session.span("Stop VM"):
+                    session.log("Stopping virtual machine...")
+                    await providers.vm.stop_vm(agent.vm_id, session=session)
+                    session.log("Waiting for VM to shut down...")
+                    vm_instance = await providers.vm.get_vm_status(agent.vm_id, session=session)
+                    agent.vm_status = vm_instance.status.value
+                    session.log("VM stopped", status=agent.vm_status)
 
-            await log_action(
-                db=db,
-                user_id=current_user.id,
-                action_type="agent.stop",
-                target_type="agent",
-                target_id=agent_id,
-                ip_address=get_client_ip(request),
-            )
+                await log_action(
+                    db=db,
+                    user_id=user_id,
+                    action_type="agent.stop",
+                    target_type="agent",
+                    target_id=agent_id,
+                    ip_address=client_ip,
+                )
 
-            await db.commit()
-            await db.refresh(agent)
+                await db.commit()
+                await db.refresh(agent)
 
-            session.emit_completion(
-                message="Agent stopped successfully",
-                data={
-                    "agent": {
-                        "id": agent.id,
-                        "name": agent.name,
-                        "vm_id": agent.vm_id,
-                        "vm_size": agent.vm_size,
-                        "vm_status": agent.vm_status,
-                        "vm_internal_ip": agent.vm_internal_ip,
-                        "bucket_id": agent.bucket_id,
-                        "current_task": agent.current_task,
-                        "platform_type": agent.platform_type,
-                        "platform_version": agent.platform_version,
-                        "template_id": agent.template_id,
-                        "gateway_port": agent.gateway_port,
-                        "created_at": agent.created_at.isoformat(),
-                        "updated_at": agent.updated_at.isoformat(),
-                    }
-                },
-            )
+                session.emit_completion(
+                    message="Agent stopped successfully",
+                    data={
+                        "agent": {
+                            "id": agent.id,
+                            "name": agent.name,
+                            "vm_id": agent.vm_id,
+                            "vm_size": agent.vm_size,
+                            "vm_status": agent.vm_status,
+                            "vm_internal_ip": agent.vm_internal_ip,
+                            "bucket_id": agent.bucket_id,
+                            "current_task": agent.current_task,
+                            "platform_type": agent.platform_type,
+                            "platform_version": agent.platform_version,
+                            "template_id": agent.template_id,
+                            "gateway_port": agent.gateway_port,
+                            "created_at": agent.created_at.isoformat(),
+                            "updated_at": agent.updated_at.isoformat(),
+                        }
+                    },
+                )
 
-        except Exception as e:
-            session.finish_streaming(error=str(e))
+            except Exception as e:
+                await db.rollback()
+                session.finish_streaming(error=str(e))
 
     task = asyncio.create_task(run_stop())
 
