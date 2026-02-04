@@ -31,6 +31,11 @@ class SavedAgent(Base, UUIDMixin, TimestampMixin):
     source_agent_id: Mapped[str | None] = mapped_column(Uuid(as_uuid=False))
     description: Mapped[str | None] = mapped_column(Text)
 
+    # State restoration fields for hatching
+    manifest_snapshot: Mapped[dict | None] = mapped_column(JSON)
+    channel_credentials_refs: Mapped[dict | None] = mapped_column(JSON)
+    config_template_snapshot: Mapped[dict | None] = mapped_column(JSON)
+
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="saved_agents")
     setup_script: Mapped["SetupScript | None"] = relationship("SetupScript")

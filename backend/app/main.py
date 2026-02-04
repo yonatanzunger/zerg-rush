@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, agents, saved_agents, credentials, logs
+from app.api.routes import auth, agents, saved_agents, credentials, logs, hatching
 from app.config import get_settings
 from app.db.session import init_db
 
@@ -54,6 +54,7 @@ app.include_router(agents.router, prefix="/agents", tags=["Agents"])
 app.include_router(saved_agents.router, prefix="/saved-agents", tags=["Saved Agents"])
 app.include_router(credentials.router, prefix="/credentials", tags=["Credentials"])
 app.include_router(logs.router, prefix="/logs", tags=["Audit Logs"])
+app.include_router(hatching.router, prefix="/agents", tags=["Hatching"])
 
 
 @app.get("/health")

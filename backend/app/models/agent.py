@@ -1,6 +1,7 @@
 """Active Agent model."""
 
 from datetime import datetime
+from enum import Enum
 from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, Uuid, func
@@ -12,6 +13,18 @@ if TYPE_CHECKING:
     from app.models.user import User
     from app.models.saved_agent import SavedAgent
     from app.models.credential import Credential
+    from app.models.agent_manifest import AgentManifestStep
+    from app.models.agent_config import AgentConfig
+    from app.models.channel_credential import ChannelCredential
+
+
+class HatchingStatus(str, Enum):
+    """Status of agent hatching (setup) process."""
+
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 
 class ActiveAgent(Base, UUIDMixin, TimestampMixin):
@@ -39,6 +52,12 @@ class ActiveAgent(Base, UUIDMixin, TimestampMixin):
     )
     gateway_port: Mapped[int] = mapped_column(Integer, default=18789)
 
+    # Hatching (setup) status
+    hatching_status: Mapped[str] = mapped_column(
+        String(20), default=HatchingStatus.PENDING.value
+    )
+    config_version: Mapped[int] = mapped_column(Integer, default=1)
+
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="agents")
     template: Mapped["SavedAgent | None"] = relationship(
@@ -46,6 +65,15 @@ class ActiveAgent(Base, UUIDMixin, TimestampMixin):
     )
     agent_credentials: Mapped[list["AgentCredential"]] = relationship(
         "AgentCredential", back_populates="agent", cascade="all, delete-orphan"
+    )
+    manifest_steps: Mapped[list["AgentManifestStep"]] = relationship(
+        "AgentManifestStep", back_populates="agent", cascade="all, delete-orphan"
+    )
+    config: Mapped["AgentConfig | None"] = relationship(
+        "AgentConfig", back_populates="agent", uselist=False, cascade="all, delete-orphan"
+    )
+    channel_credentials: Mapped[list["ChannelCredential"]] = relationship(
+        "ChannelCredential", back_populates="agent", cascade="all, delete-orphan"
     )
 
     @property
@@ -55,6 +83,24 @@ class ActiveAgent(Base, UUIDMixin, TimestampMixin):
 
     def __repr__(self) -> str:
         return f"<ActiveAgent {self.name} ({self.vm_status})>"
+
+    def is_hatching_complete(self) -> bool:
+        """Check if hatching is complete."""
+        return self.hatching_status == HatchingStatus.COMPLETED.value
+
+    def get_pending_manifest_steps(self) -> list["AgentManifestStep"]:
+        """Get all pending manifest steps."""
+        from app.models.agent_manifest import ManifestStepStatus
+
+        return [
+            step
+            for step in self.manifest_steps
+            if step.status == ManifestStepStatus.PENDING.value
+        ]
+
+    def get_interactive_pending_steps(self) -> list["AgentManifestStep"]:
+        """Get pending steps that require user interaction."""
+        return [step for step in self.get_pending_manifest_steps() if step.is_interactive()]
 
 
 class AgentCredential(Base):

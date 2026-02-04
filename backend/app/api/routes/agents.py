@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.agents import get_platform
+from app.agents.base import StartupScriptConfig
 from app.api.dependencies import (
     CurrentUser,
     DbSession,
@@ -26,7 +27,19 @@ from app.cloud.factory import get_providers, CloudProviders
 from app.cloud.interfaces import VMConfig, VMStatus
 from app.config import get_settings
 from app.db.session import AsyncSessionLocal
-from app.models import ActiveAgent, SavedAgent, Credential, AgentCredential
+from app.models import (
+    ActiveAgent,
+    SavedAgent,
+    Credential,
+    AgentCredential,
+    AgentConfig,
+    HatchingStatus,
+)
+from app.services import (
+    OpenClawConfigGenerator,
+    OpenClawConfigRequest,
+    StartupBundleService,
+)
 from app.tracing import ActiveSession
 
 router = APIRouter()
@@ -39,9 +52,13 @@ class CreateAgentRequest(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=255)
     platform_type: str = Field(default="openclaw")
-    vm_size: str = Field(default=None)
+    vm_size: str | None = Field(default=None)
     template_id: str | None = None
     credential_ids: list[str] = Field(default_factory=list)
+    # Hatching configuration
+    enable_whatsapp: bool = Field(default=False)
+    whatsapp_allow_from: list[str] | None = Field(default=None)
+    auto_start: bool = Field(default=True)
 
 
 class AgentResponse(BaseModel):
@@ -62,6 +79,7 @@ class AgentResponse(BaseModel):
     platform_version: str | None
     template_id: str | None
     gateway_port: int
+    hatching_status: str
     created_at: datetime
     updated_at: datetime
     # Computed fields for UI links
@@ -153,6 +171,7 @@ def _agent_to_response(agent: "ActiveAgent") -> AgentResponse:
         platform_version=agent.platform_version,
         template_id=agent.template_id,
         gateway_port=agent.gateway_port,
+        hatching_status=agent.hatching_status,
         created_at=agent.created_at,
         updated_at=agent.updated_at,
         cloud_console_url=urls["cloud_console_url"],
@@ -504,18 +523,91 @@ async def create_agent_streaming(
                     except Exception as e:
                         raise ValueError(f"Failed to create storage bucket: {str(e)}")
 
-                # Create VM
+                # Generate OpenClaw config and manifest
+                config_template = None
+                env_var_refs = {}
+                manifest_steps = []
+                gateway_port = get_platform(body.platform_type).get_default_gateway_port()
+
+                with session.span("Generate configuration"):
+                    session.log("Generating OpenClaw configuration...")
+                    config_generator = OpenClawConfigGenerator(providers.secret, db)
+                    config_request = OpenClawConfigRequest(
+                        agent_id=agent_id,
+                        user_id=user_id,
+                        gateway_port=gateway_port,
+                        enable_whatsapp=body.enable_whatsapp,
+                        whatsapp_allow_from=body.whatsapp_allow_from,
+                    )
+                    config_template, env_var_refs = await config_generator.generate_config(
+                        config_request,
+                        body.credential_ids,
+                    )
+                    manifest_steps = config_generator.generate_manifest_steps(
+                        config_request,
+                        body.credential_ids,
+                    )
+                    session.log(
+                        "Configuration generated",
+                        channels=["whatsapp"] if body.enable_whatsapp else [],
+                        manifest_steps=len(manifest_steps),
+                    )
+
+                # Create startup bundle and upload to storage
+                bundle_url = None
+                decryption_key = None
+
+                with session.span("Create startup bundle"):
+                    session.log("Creating credential bundle...")
+                    # Create a temporary AgentConfig for the bundle service
+                    temp_config = AgentConfig(
+                        agent_id=agent_id,
+                        config_template=config_template,
+                        gateway_port=gateway_port,
+                        env_var_refs=env_var_refs,
+                        enabled_channels=["whatsapp"] if body.enable_whatsapp else [],
+                        whatsapp_allow_from=body.whatsapp_allow_from,
+                    )
+                    bundle_service = StartupBundleService(providers.secret, providers.storage)
+                    bundle_result = await bundle_service.create_bundle(
+                        agent_id=agent_id,
+                        bucket_id=bucket_id,
+                        config=temp_config,
+                        channel_credentials=[],  # No channel creds yet for new agents
+                        session=session,
+                    )
+                    bundle_url = bundle_result.signed_url
+                    decryption_key = bundle_result.decryption_key
+                    session.log("Credential bundle created and uploaded")
+
+                # Determine hatching status
+                has_interactive_steps = config_generator.has_interactive_steps(config_request)
+                initial_hatching_status = (
+                    HatchingStatus.PENDING.value
+                    if has_interactive_steps
+                    else HatchingStatus.COMPLETED.value
+                )
+
+                # Create VM with startup bundle
                 vm_instance = None
                 with session.span("Create VM"):
                     try:
                         session.log("Provisioning virtual machine...")
+                        startup_config = StartupScriptConfig(
+                            bundle_url=bundle_url,
+                            decryption_key=decryption_key,
+                            gateway_port=gateway_port,
+                        )
                         vm_config = VMConfig(
                             name=vm_name,
                             size=vm_size,
                             image="default",
                             user_id=user_id,
                             agent_id=agent_id,
-                            startup_script=get_platform(body.platform_type).get_startup_script(current_user),
+                            startup_script=get_platform(body.platform_type).get_startup_script(
+                                current_user,
+                                config=startup_config,
+                            ),
                         )
                         vm_instance = await providers.vm.create_vm(vm_config, session=session)
                         session.log("VM created successfully", vm_id=vm_instance.vm_id)
@@ -545,8 +637,26 @@ async def create_agent_streaming(
                         bucket_id=bucket_id,
                         platform_type=body.platform_type,
                         template_id=body.template_id,
+                        gateway_port=gateway_port,
+                        hatching_status=initial_hatching_status,
                     )
                     db.add(agent)
+
+                    # Save agent config
+                    agent_config = AgentConfig(
+                        agent_id=agent_id,
+                        config_template=config_template,
+                        gateway_port=gateway_port,
+                        env_var_refs=env_var_refs,
+                        enabled_channels=["whatsapp"] if body.enable_whatsapp else [],
+                        whatsapp_allow_from=body.whatsapp_allow_from,
+                    )
+                    db.add(agent_config)
+
+                    # Save manifest steps
+                    for step in manifest_steps:
+                        step.agent_id = agent_id
+                        db.add(step)
 
                     # Grant credentials to agent
                     for cred_id in body.credential_ids:
@@ -568,13 +678,15 @@ async def create_agent_streaming(
                             "platform_type": body.platform_type,
                             "vm_size": vm_size,
                             "template_id": body.template_id,
+                            "enable_whatsapp": body.enable_whatsapp,
+                            "hatching_status": initial_hatching_status,
                         },
                         ip_address=client_ip,
                     )
 
                     await db.commit()
                     await db.refresh(agent)
-                    session.log("Agent record saved")
+                    session.log("Agent record saved", hatching_status=initial_hatching_status)
 
                 # Emit completion event with agent data
                 agent_response = _agent_to_response(agent)
@@ -597,6 +709,7 @@ async def create_agent_streaming(
                             "platform_version": agent_response.platform_version,
                             "template_id": agent_response.template_id,
                             "gateway_port": agent_response.gateway_port,
+                            "hatching_status": agent_response.hatching_status,
                             "created_at": agent.created_at.isoformat(),
                             "updated_at": agent.updated_at.isoformat(),
                             "cloud_console_url": agent_response.cloud_console_url,

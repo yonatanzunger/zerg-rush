@@ -1,7 +1,7 @@
 """Abstract base class for agent platforms."""
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -15,6 +15,19 @@ class PlatformConfig:
     platform_type: str
     version: str | None = None
     # Additional config options can be added by subclasses
+
+
+@dataclass
+class StartupScriptConfig:
+    """Configuration for generating a startup script with credentials.
+
+    This is used to pass credential bundle information to the startup script
+    so the VM can download and decrypt the configuration on boot.
+    """
+
+    bundle_url: str | None = None
+    decryption_key: str | None = None
+    gateway_port: int = 18789
 
 
 class AgentPlatform(ABC):
@@ -36,12 +49,18 @@ class AgentPlatform(ABC):
         return None
 
     @abstractmethod
-    def get_startup_script(self, user: "User", version: str | None = None) -> str:
+    def get_startup_script(
+        self,
+        user: "User",
+        version: str | None = None,
+        config: StartupScriptConfig | None = None,
+    ) -> str:
         """Get the VM startup script for this platform.
 
         Args:
             user: The current user requesting the agent.
             version: Optional specific version to install. If None, uses latest.
+            config: Optional startup script configuration with bundle URL and key.
 
         Returns:
             Bash startup script to configure the VM for this platform.
