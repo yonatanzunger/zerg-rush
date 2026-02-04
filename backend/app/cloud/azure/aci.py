@@ -1,5 +1,6 @@
 """Azure Container Instances provider implementation."""
 
+import asyncio
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -240,15 +241,18 @@ class AzureACIProvider(VMProvider):
                 # Remove IP address when using subnet (handled by VNet)
                 container_group.ip_address = None
 
-            # Create the container group
-            poller = self.client.container_groups.begin_create_or_update(
+            # Create the container group (run in thread pool to avoid blocking event loop)
+            trace.log("Sending create request to Azure...")
+            poller = await asyncio.to_thread(
+                self.client.container_groups.begin_create_or_update,
                 self.resource_group,
                 container_group_name,
                 container_group,
             )
 
             # Wait for creation to complete
-            poller.result()
+            trace.log("Waiting for container provisioning...")
+            await asyncio.to_thread(poller.result)
 
             trace.log("Azure Container Instance created", name=container_group_name)
 
@@ -259,11 +263,14 @@ class AzureACIProvider(VMProvider):
         with FunctionTrace(session, "Deleting Azure Container Instance", vm_id=vm_id) as trace:
             container_group_name = self._sanitize_name(vm_id)
 
-            poller = self.client.container_groups.begin_delete(
+            trace.log("Sending delete request to Azure...")
+            poller = await asyncio.to_thread(
+                self.client.container_groups.begin_delete,
                 self.resource_group,
                 container_group_name,
             )
-            poller.result()
+            trace.log("Waiting for container termination...")
+            await asyncio.to_thread(poller.result)
             trace.log("Azure Container Instance deleted", vm_id=vm_id)
 
     async def start_vm(self, vm_id: str, session: Session | None = None) -> None:
@@ -271,11 +278,14 @@ class AzureACIProvider(VMProvider):
         with FunctionTrace(session, "Starting Azure Container Instance", vm_id=vm_id) as trace:
             container_group_name = self._sanitize_name(vm_id)
 
-            poller = self.client.container_groups.begin_start(
+            trace.log("Sending start request to Azure...")
+            poller = await asyncio.to_thread(
+                self.client.container_groups.begin_start,
                 self.resource_group,
                 container_group_name,
             )
-            poller.result()
+            trace.log("Waiting for container to start...")
+            await asyncio.to_thread(poller.result)
             trace.log("Azure Container Instance started", vm_id=vm_id)
 
     async def stop_vm(self, vm_id: str, session: Session | None = None) -> None:
@@ -283,7 +293,9 @@ class AzureACIProvider(VMProvider):
         with FunctionTrace(session, "Stopping Azure Container Instance", vm_id=vm_id) as trace:
             container_group_name = self._sanitize_name(vm_id)
 
-            self.client.container_groups.stop(
+            trace.log("Sending stop request to Azure...")
+            await asyncio.to_thread(
+                self.client.container_groups.stop,
                 self.resource_group,
                 container_group_name,
             )
@@ -296,7 +308,8 @@ class AzureACIProvider(VMProvider):
         container_group_name = self._sanitize_name(vm_id)
 
         try:
-            container_group = self.client.container_groups.get(
+            container_group = await asyncio.to_thread(
+                self.client.container_groups.get,
                 self.resource_group,
                 container_group_name,
             )

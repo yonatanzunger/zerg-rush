@@ -1,5 +1,6 @@
 """GCP Compute Engine VM provider implementation."""
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from typing import Any
@@ -144,7 +145,10 @@ class GCPVMProvider(VMProvider):
             request.zone = self.zone
             request.instance_resource = instance
 
-            operation = self.instances_client.insert(request=request)
+            # Run blocking GCP call in thread pool to avoid blocking the event loop
+            operation = await asyncio.to_thread(
+                self.instances_client.insert, request=request
+            )
 
             # Wait for operation to complete
             trace.log("Waiting for VM provisioning to complete (this may take 1-2 minutes)...")
@@ -152,7 +156,8 @@ class GCPVMProvider(VMProvider):
             wait_request.project = self.project_id
             wait_request.zone = self.zone
             wait_request.operation = operation.name
-            self.operations_client.wait(request=wait_request)
+            # Run blocking wait in thread pool to allow event loop to stream events
+            await asyncio.to_thread(self.operations_client.wait, request=wait_request)
 
             trace.log("GCE VM created successfully", name=config.name)
 
@@ -169,7 +174,9 @@ class GCPVMProvider(VMProvider):
             request.zone = self.zone
             request.instance = vm_id
 
-            operation = self.instances_client.delete(request=request)
+            operation = await asyncio.to_thread(
+                self.instances_client.delete, request=request
+            )
 
             # Wait for operation to complete
             trace.log("Waiting for VM termination to complete...")
@@ -177,7 +184,7 @@ class GCPVMProvider(VMProvider):
             wait_request.project = self.project_id
             wait_request.zone = self.zone
             wait_request.operation = operation.name
-            self.operations_client.wait(request=wait_request)
+            await asyncio.to_thread(self.operations_client.wait, request=wait_request)
 
             trace.log("GCE VM deleted successfully", vm_id=vm_id)
 
@@ -190,14 +197,16 @@ class GCPVMProvider(VMProvider):
             request.zone = self.zone
             request.instance = vm_id
 
-            operation = self.instances_client.start(request=request)
+            operation = await asyncio.to_thread(
+                self.instances_client.start, request=request
+            )
 
             trace.log("Waiting for VM to boot up...")
             wait_request = compute_v1.WaitZoneOperationRequest()
             wait_request.project = self.project_id
             wait_request.zone = self.zone
             wait_request.operation = operation.name
-            self.operations_client.wait(request=wait_request)
+            await asyncio.to_thread(self.operations_client.wait, request=wait_request)
 
             trace.log("GCE VM started successfully", vm_id=vm_id)
 
@@ -210,14 +219,16 @@ class GCPVMProvider(VMProvider):
             request.zone = self.zone
             request.instance = vm_id
 
-            operation = self.instances_client.stop(request=request)
+            operation = await asyncio.to_thread(
+                self.instances_client.stop, request=request
+            )
 
             trace.log("Waiting for VM to shut down gracefully...")
             wait_request = compute_v1.WaitZoneOperationRequest()
             wait_request.project = self.project_id
             wait_request.zone = self.zone
             wait_request.operation = operation.name
-            self.operations_client.wait(request=wait_request)
+            await asyncio.to_thread(self.operations_client.wait, request=wait_request)
 
             trace.log("GCE VM stopped successfully", vm_id=vm_id)
 
@@ -230,7 +241,7 @@ class GCPVMProvider(VMProvider):
         request.zone = self.zone
         request.instance = vm_id
 
-        instance = self.instances_client.get(request=request)
+        instance = await asyncio.to_thread(self.instances_client.get, request=request)
 
         # Get internal IP
         internal_ip = None

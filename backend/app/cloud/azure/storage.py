@@ -1,5 +1,6 @@
 """Azure Blob Storage provider implementation."""
 
+import asyncio
 import json
 import time
 from datetime import datetime, timedelta, timezone
@@ -87,8 +88,10 @@ class AzureBlobStorageProvider(StorageProvider):
         ) as trace:
             container_client = self.client.get_container_client(container_name)
 
-            # Create the container with metadata
-            container_client.create_container(
+            # Create the container with metadata (run in thread pool)
+            trace.log("Sending create request to Azure...")
+            await asyncio.to_thread(
+                container_client.create_container,
                 metadata={
                     "zerg_rush": "agent-bucket",
                     "user_id": user_id.replace("-", ""),
@@ -106,13 +109,17 @@ class AzureBlobStorageProvider(StorageProvider):
         with FunctionTrace(session, "Deleting Azure Blob container", bucket_id=bucket_id) as trace:
             container_client = self.client.get_container_client(bucket_id)
 
-            # Delete all blobs first
-            blobs = container_client.list_blobs()
-            for blob in blobs:
-                container_client.delete_blob(blob.name)
+            # Delete all blobs first (run in thread pool)
+            trace.log("Listing blobs in container...")
+            blobs = await asyncio.to_thread(lambda: list(container_client.list_blobs()))
+            if blobs:
+                trace.log(f"Deleting {len(blobs)} blobs...")
+                for blob in blobs:
+                    await asyncio.to_thread(container_client.delete_blob, blob.name)
 
             # Delete the container
-            container_client.delete_container()
+            trace.log("Deleting container...")
+            await asyncio.to_thread(container_client.delete_container)
 
             trace.log("Azure Blob container deleted", bucket_id=bucket_id)
 
@@ -145,8 +152,9 @@ class AzureBlobStorageProvider(StorageProvider):
             # In production, use User Delegation SAS with AAD credentials
             expiry = datetime.now(timezone.utc) + timedelta(hours=1)
 
-            # Generate a User Delegation Key (requires AAD authentication)
-            delegation_key = self.client.get_user_delegation_key(
+            # Generate a User Delegation Key (requires AAD authentication, run in thread pool)
+            delegation_key = await asyncio.to_thread(
+                self.client.get_user_delegation_key,
                 key_start_time=datetime.now(timezone.utc),
                 key_expiry_time=expiry,
             )
@@ -185,7 +193,9 @@ class AzureBlobStorageProvider(StorageProvider):
             container_client = self.client.get_container_client(bucket_id)
 
             objects = []
-            blobs = container_client.list_blobs(name_starts_with=prefix)
+            blobs = await asyncio.to_thread(
+                lambda: list(container_client.list_blobs(name_starts_with=prefix))
+            )
 
             for blob in blobs:
                 objects.append(
@@ -209,7 +219,7 @@ class AzureBlobStorageProvider(StorageProvider):
         with FunctionTrace(session, "Uploading Azure Blob object", bucket_id=bucket_id, key=key) as trace:
             container_client = self.client.get_container_client(bucket_id)
             blob_client = container_client.get_blob_client(key)
-            blob_client.upload_blob(data, overwrite=True)
+            await asyncio.to_thread(blob_client.upload_blob, data, overwrite=True)
             trace.log("Object uploaded", bucket_id=bucket_id, key=key, size=len(data))
 
     async def download_object(
@@ -219,8 +229,8 @@ class AzureBlobStorageProvider(StorageProvider):
         with FunctionTrace(session, "Downloading Azure Blob object", bucket_id=bucket_id, key=key) as trace:
             container_client = self.client.get_container_client(bucket_id)
             blob_client = container_client.get_blob_client(key)
-            download_stream = blob_client.download_blob()
-            data = download_stream.readall()
+            download_stream = await asyncio.to_thread(blob_client.download_blob)
+            data = await asyncio.to_thread(download_stream.readall)
             trace.log("Object downloaded", bucket_id=bucket_id, key=key, size=len(data))
             return data
 
@@ -231,7 +241,7 @@ class AzureBlobStorageProvider(StorageProvider):
         with FunctionTrace(session, "Deleting Azure Blob object", bucket_id=bucket_id, key=key) as trace:
             container_client = self.client.get_container_client(bucket_id)
             blob_client = container_client.get_blob_client(key)
-            blob_client.delete_blob()
+            await asyncio.to_thread(blob_client.delete_blob)
             trace.log("Object deleted", bucket_id=bucket_id, key=key)
 
     async def get_signed_url(
@@ -245,8 +255,9 @@ class AzureBlobStorageProvider(StorageProvider):
         with FunctionTrace(session, "Generating signed URL", bucket_id=bucket_id, key=key) as trace:
             expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
 
-            # Generate a User Delegation Key
-            delegation_key = self.client.get_user_delegation_key(
+            # Generate a User Delegation Key (run in thread pool)
+            delegation_key = await asyncio.to_thread(
+                self.client.get_user_delegation_key,
                 key_start_time=datetime.now(timezone.utc),
                 key_expiry_time=expiry,
             )

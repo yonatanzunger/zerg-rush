@@ -1,5 +1,6 @@
 """GCP Cloud Storage provider implementation."""
 
+import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -71,9 +72,10 @@ class GCPStorageProvider(StorageProvider):
                 "user-id": user_id.replace("-", ""),
             }
 
-            # Create the bucket
+            # Create the bucket (run in thread pool to avoid blocking event loop)
             trace.log("Sending create request to GCS...", location=self.location)
-            new_bucket = self.client.create_bucket(
+            new_bucket = await asyncio.to_thread(
+                self.client.create_bucket,
                 bucket,
                 location=self.location,
             )
@@ -84,7 +86,7 @@ class GCPStorageProvider(StorageProvider):
                 age=30,
                 is_live=False,  # Only non-current versions
             )
-            new_bucket.patch()
+            await asyncio.to_thread(new_bucket.patch)
 
             trace.log("GCS bucket created successfully", bucket_name=bucket_name)
 
@@ -97,19 +99,19 @@ class GCPStorageProvider(StorageProvider):
         with FunctionTrace(session, "Deleting GCS bucket", bucket_id=bucket_id) as trace:
             bucket = self.client.bucket(bucket_id)
 
-            # Delete all objects first
+            # Delete all objects first (run in thread pool)
             trace.log("Listing objects in bucket...")
-            blobs = list(bucket.list_blobs())
+            blobs = await asyncio.to_thread(lambda: list(bucket.list_blobs()))
             if blobs:
                 trace.log(f"Deleting {len(blobs)} objects from bucket...")
                 for blob in blobs:
-                    blob.delete()
+                    await asyncio.to_thread(blob.delete)
             else:
                 trace.log("Bucket is empty")
 
             # Delete the bucket
             trace.log("Deleting bucket...")
-            bucket.delete()
+            await asyncio.to_thread(bucket.delete)
 
             trace.log("GCS bucket deleted successfully", bucket_id=bucket_id)
 
@@ -136,10 +138,11 @@ class GCPStorageProvider(StorageProvider):
         # roles/iam.serviceAccountTokenCreator
         iam_client = iam_credentials_v1.IAMCredentialsClient()
 
-        # Generate a short-lived access token
+        # Generate a short-lived access token (run in thread pool)
         # Note: In production, you'd create a dedicated service account
         # per agent/bucket with specific IAM bindings
-        response = iam_client.generate_access_token(
+        response = await asyncio.to_thread(
+            iam_client.generate_access_token,
             name=f"projects/-/serviceAccounts/{self.project_id}@appspot.gserviceaccount.com",
             scope=permissions,
             lifetime={"seconds": 3600},  # 1 hour
@@ -164,7 +167,7 @@ class GCPStorageProvider(StorageProvider):
     ) -> list[StorageObject]:
         """List objects in a GCS bucket."""
         bucket = self.client.bucket(bucket_id)
-        blobs = bucket.list_blobs(prefix=prefix)
+        blobs = await asyncio.to_thread(lambda: list(bucket.list_blobs(prefix=prefix)))
 
         objects = []
         for blob in blobs:
@@ -185,7 +188,7 @@ class GCPStorageProvider(StorageProvider):
         """Upload an object to a GCS bucket."""
         bucket = self.client.bucket(bucket_id)
         blob = bucket.blob(key)
-        blob.upload_from_string(data)
+        await asyncio.to_thread(blob.upload_from_string, data)
 
     async def download_object(
         self, bucket_id: str, key: str, session: Session | None = None
@@ -193,7 +196,7 @@ class GCPStorageProvider(StorageProvider):
         """Download an object from a GCS bucket."""
         bucket = self.client.bucket(bucket_id)
         blob = bucket.blob(key)
-        return blob.download_as_bytes()
+        return await asyncio.to_thread(blob.download_as_bytes)
 
     async def delete_object(
         self, bucket_id: str, key: str, session: Session | None = None
@@ -201,7 +204,7 @@ class GCPStorageProvider(StorageProvider):
         """Delete an object from a GCS bucket."""
         bucket = self.client.bucket(bucket_id)
         blob = bucket.blob(key)
-        blob.delete()
+        await asyncio.to_thread(blob.delete)
 
     async def get_signed_url(
         self,
@@ -214,7 +217,8 @@ class GCPStorageProvider(StorageProvider):
         bucket = self.client.bucket(bucket_id)
         blob = bucket.blob(key)
 
-        url = blob.generate_signed_url(
+        url = await asyncio.to_thread(
+            blob.generate_signed_url,
             version="v4",
             expiration=timedelta(seconds=expires_in),
             method="GET",
