@@ -74,6 +74,14 @@ export const agents = {
 
   chat: (id: string, message: string) =>
     api.post<{ response: string }>(`/agents/${id}/chat`, { message }).then((r) => r.data),
+
+  // Streaming endpoints - these return URLs for use with useStreamingOperation hook
+  streaming: {
+    createUrl: () => `${API_BASE}/agents/stream`,
+    deleteUrl: (id: string) => `${API_BASE}/agents/${id}/stream`,
+    startUrl: (id: string) => `${API_BASE}/agents/${id}/start/stream`,
+    stopUrl: (id: string) => `${API_BASE}/agents/${id}/stop/stream`,
+  },
 }
 
 // Saved Agents

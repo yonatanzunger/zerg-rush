@@ -6,7 +6,9 @@
       "Bash(powershell -ExecutionPolicy Bypass -File scripts/run-tests.ps1:*)",
       "Bash(dir:*)",
       "Bash(python -m pytest:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(tree:*)",
+      "Bash(npx tsc --noEmit)"
     ]
   }
 }

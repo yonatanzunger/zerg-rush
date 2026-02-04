@@ -1,4 +1,4 @@
-"""Event tracing package for debugging request flows."""
+"""Event tracing package for debugging request flows and streaming updates."""
 
 from app.tracing.tracer import (
     ActiveSession,
@@ -6,6 +6,7 @@ from app.tracing.tracer import (
     FunctionTrace,
     NoOpSession,
     Session,
+    StreamEvent,
     TraceEvent,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "FunctionTrace",
     "NoOpSession",
     "Session",
+    "StreamEvent",
     "TraceEvent",
 ]

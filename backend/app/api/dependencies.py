@@ -15,7 +15,7 @@ from app.models import User, AuditLog, UserOAuthToken
 from app.cloud.factory import get_providers, get_cloud_providers, CloudProviders
 from app.cloud.interfaces import UserCredentials
 from app.services import token_service, TokenNotFoundError
-from app.tracing import EventTracer, Session
+from app.tracing import ActiveSession, EventTracer, Session
 
 settings = get_settings()
 security = HTTPBearer()
@@ -170,4 +170,22 @@ def get_trace_session(request: Request) -> Session:
     return session
 
 
+def get_streaming_session(request: Request) -> ActiveSession:
+    """Create a streaming trace session for long-running operations.
+
+    Unlike regular trace sessions, streaming sessions always capture events
+    and emit them to a queue for real-time streaming to the client.
+    The debug flag controls whether events are also printed to console.
+    """
+    tracer = EventTracer.get_instance()
+    session = tracer.create_streaming_session(
+        client_ip=get_client_ip(request),
+        request_path=str(request.url.path),
+        request_method=request.method,
+    )
+    # Don't store in request.state - streaming sessions handle their own lifecycle
+    return session
+
+
 TraceSession = Annotated[Session, Depends(get_trace_session)]
+StreamingSession = Annotated[ActiveSession, Depends(get_streaming_session)]

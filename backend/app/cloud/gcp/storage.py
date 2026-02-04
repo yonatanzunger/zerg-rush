@@ -61,6 +61,7 @@ class GCPStorageProvider(StorageProvider):
         with FunctionTrace(
             session, "Creating GCS bucket", name=name, bucket_name=bucket_name
         ) as trace:
+            trace.log("Configuring bucket settings...")
             bucket = self.client.bucket(bucket_name)
             bucket.storage_class = "STANDARD"
 
@@ -71,19 +72,21 @@ class GCPStorageProvider(StorageProvider):
             }
 
             # Create the bucket
+            trace.log("Sending create request to GCS...", location=self.location)
             new_bucket = self.client.create_bucket(
                 bucket,
                 location=self.location,
             )
 
             # Set lifecycle rules (e.g., delete old versions after 30 days)
+            trace.log("Configuring lifecycle rules...")
             new_bucket.add_lifecycle_delete_rule(
                 age=30,
                 is_live=False,  # Only non-current versions
             )
             new_bucket.patch()
 
-            trace.log("GCS bucket created", bucket_name=bucket_name)
+            trace.log("GCS bucket created successfully", bucket_name=bucket_name)
 
             return bucket_name
 
@@ -95,14 +98,20 @@ class GCPStorageProvider(StorageProvider):
             bucket = self.client.bucket(bucket_id)
 
             # Delete all objects first
-            blobs = bucket.list_blobs()
-            for blob in blobs:
-                blob.delete()
+            trace.log("Listing objects in bucket...")
+            blobs = list(bucket.list_blobs())
+            if blobs:
+                trace.log(f"Deleting {len(blobs)} objects from bucket...")
+                for blob in blobs:
+                    blob.delete()
+            else:
+                trace.log("Bucket is empty")
 
             # Delete the bucket
+            trace.log("Deleting bucket...")
             bucket.delete()
 
-            trace.log("GCS bucket deleted", bucket_id=bucket_id)
+            trace.log("GCS bucket deleted successfully", bucket_id=bucket_id)
 
     async def create_scoped_credentials(
         self,

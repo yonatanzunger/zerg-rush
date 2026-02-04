@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { Plus, Bot, Star, Play, Square, Trash2 } from 'lucide-react'
 import { agents, savedAgents } from '../services/api'
@@ -7,11 +7,18 @@ import Button from '../components/common/Button'
 import Card, { CardBody } from '../components/common/Card'
 import StatusBadge from '../components/common/StatusBadge'
 import Modal from '../components/common/Modal'
+import OperationProgress from '../components/common/OperationProgress'
+import { useStreamingOperation } from '../hooks/useStreamingOperation'
 import type { Agent, CreateAgentRequest } from '../types'
 
 export default function Dashboard() {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
+  const [isProgressModalOpen, setIsProgressModalOpen] = useState(false)
+  const [progressTitle, setProgressTitle] = useState('')
   const queryClient = useQueryClient()
+
+  // Streaming operation hook for long-running operations
+  const streamingOp = useStreamingOperation<Agent>()
 
   const { data: agentsData, isLoading: agentsLoading } = useQuery({
     queryKey: ['agents'],
@@ -23,42 +30,70 @@ export default function Dashboard() {
     queryFn: () => savedAgents.getStarred(),
   })
 
-  const createMutation = useMutation({
-    mutationFn: (data: CreateAgentRequest) => agents.create(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['agents'] })
-      setIsCreateModalOpen(false)
-    },
-  })
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => agents.delete(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['agents'] })
-    },
-  })
+  // Handle streaming agent creation
+  const handleCreateAgentStreaming = async (data: CreateAgentRequest) => {
+    setIsCreateModalOpen(false)
+    setProgressTitle(`Creating agent "${data.name}"...`)
+    setIsProgressModalOpen(true)
+    streamingOp.reset()
 
-  const startMutation = useMutation({
-    mutationFn: (id: string) => agents.start(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['agents'] })
-    },
-  })
+    const result = await streamingOp.executePost(agents.streaming.createUrl(), data)
 
-  const stopMutation = useMutation({
-    mutationFn: (id: string) => agents.stop(id),
-    onSuccess: () => {
+    if (result) {
       queryClient.invalidateQueries({ queryKey: ['agents'] })
-    },
-  })
+    }
+  }
+
+  // Handle streaming agent deletion
+  const handleDeleteAgentStreaming = async (agent: Agent) => {
+    if (!confirm(`Are you sure you want to delete "${agent.name}"?`)) {
+      return
+    }
+
+    setProgressTitle(`Deleting agent "${agent.name}"...`)
+    setIsProgressModalOpen(true)
+    streamingOp.reset()
+
+    await streamingOp.executeDelete(agents.streaming.deleteUrl(agent.id))
+    queryClient.invalidateQueries({ queryKey: ['agents'] })
+  }
+
+  // Handle streaming agent start
+  const handleStartAgentStreaming = async (agent: Agent) => {
+    setProgressTitle(`Starting agent "${agent.name}"...`)
+    setIsProgressModalOpen(true)
+    streamingOp.reset()
+
+    const result = await streamingOp.executePost(agents.streaming.startUrl(agent.id))
+
+    if (result) {
+      queryClient.invalidateQueries({ queryKey: ['agents'] })
+    }
+  }
+
+  // Handle streaming agent stop
+  const handleStopAgentStreaming = async (agent: Agent) => {
+    setProgressTitle(`Stopping agent "${agent.name}"...`)
+    setIsProgressModalOpen(true)
+    streamingOp.reset()
+
+    const result = await streamingOp.executePost(agents.streaming.stopUrl(agent.id))
+
+    if (result) {
+      queryClient.invalidateQueries({ queryKey: ['agents'] })
+    }
+  }
 
   const handleCreateAgent = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     const formData = new FormData(e.currentTarget)
-    createMutation.mutate({
+    const data: CreateAgentRequest = {
       name: formData.get('name') as string,
       platform_type: 'openclaw',
-    })
+    }
+    // Use streaming version
+    handleCreateAgentStreaming(data)
   }
 
   return (
@@ -88,7 +123,7 @@ export default function Dashboard() {
                 key={template.id}
                 className="flex-shrink-0 w-48 cursor-pointer hover:border-primary-300"
                 onClick={() => {
-                  createMutation.mutate({
+                  handleCreateAgentStreaming({
                     name: `${template.name} Agent`,
                     platform_type: template.platform_type,
                     template_id: template.id,
@@ -131,13 +166,9 @@ export default function Dashboard() {
               <AgentCard
                 key={agent.id}
                 agent={agent}
-                onStart={() => startMutation.mutate(agent.id)}
-                onStop={() => stopMutation.mutate(agent.id)}
-                onDelete={() => {
-                  if (confirm('Are you sure you want to delete this agent?')) {
-                    deleteMutation.mutate(agent.id)
-                  }
-                }}
+                onStart={() => handleStartAgentStreaming(agent)}
+                onStop={() => handleStopAgentStreaming(agent)}
+                onDelete={() => handleDeleteAgentStreaming(agent)}
               />
             ))}
           </div>
@@ -178,11 +209,39 @@ export default function Dashboard() {
             <Button type="button" variant="secondary" onClick={() => setIsCreateModalOpen(false)}>
               Cancel
             </Button>
-            <Button type="submit" isLoading={createMutation.isPending}>
+            <Button type="submit" isLoading={streamingOp.isLoading}>
               Create Agent
             </Button>
           </div>
         </form>
+      </Modal>
+
+      {/* Progress Modal for streaming operations */}
+      <Modal
+        isOpen={isProgressModalOpen}
+        onClose={() => {
+          if (!streamingOp.isLoading) {
+            setIsProgressModalOpen(false)
+          }
+        }}
+        title={progressTitle}
+      >
+        <OperationProgress
+          events={streamingOp.events}
+          isLoading={streamingOp.isLoading}
+          error={streamingOp.error}
+          isComplete={!!streamingOp.result || (streamingOp.events.some(e => e.type === 'complete') && !streamingOp.error)}
+          maxHeight="400px"
+        />
+        <div className="mt-4 flex justify-end">
+          <Button
+            variant={streamingOp.error ? 'secondary' : 'primary'}
+            onClick={() => setIsProgressModalOpen(false)}
+            disabled={streamingOp.isLoading}
+          >
+            {streamingOp.isLoading ? 'Please wait...' : streamingOp.error ? 'Close' : 'Done'}
+          </Button>
+        </div>
       </Modal>
     </div>
   )

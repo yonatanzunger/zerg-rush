@@ -81,12 +81,15 @@ class GCPVMProvider(VMProvider):
             size=config.size,
             agent_id=config.agent_id,
         ) as trace:
+            trace.log("Configuring VM instance parameters...")
+
             # Build instance configuration
             instance = compute_v1.Instance()
             instance.name = config.name
             instance.machine_type = f"zones/{self.zone}/machineTypes/{config.size}"
 
             # Boot disk
+            trace.log("Setting up boot disk...", size_gb=20)
             disk = compute_v1.AttachedDisk()
             disk.auto_delete = True
             disk.boot = True
@@ -100,11 +103,12 @@ class GCPVMProvider(VMProvider):
             instance.disks = [disk]
 
             # Network interface
+            trace.log("Configuring network interface...")
             network_interface = compute_v1.NetworkInterface()
             network_interface.access_configs = [
                 compute_v1.AccessConfig(
-                    type_=compute_v1.AccessConfig.Type.ONE_TO_ONE_NAT,
-                    network_tier=compute_v1.AccessConfig.NetworkTier.PREMIUM,
+                    type_="ONE_TO_ONE_NAT",
+                    network_tier="PREMIUM",
                 )
             ]
             if self.network != "default":
@@ -126,6 +130,7 @@ class GCPVMProvider(VMProvider):
 
             # Startup script
             if config.startup_script:
+                trace.log("Attaching startup script...")
                 metadata = compute_v1.Metadata()
                 metadata.items = [
                     {"key": "startup-script", "value": config.startup_script}
@@ -133,6 +138,7 @@ class GCPVMProvider(VMProvider):
                 instance.metadata = metadata
 
             # Create the instance
+            trace.log("Sending create request to GCP...")
             request = compute_v1.InsertInstanceRequest()
             request.project = self.project_id
             request.zone = self.zone
@@ -141,20 +147,23 @@ class GCPVMProvider(VMProvider):
             operation = self.instances_client.insert(request=request)
 
             # Wait for operation to complete
+            trace.log("Waiting for VM provisioning to complete (this may take 1-2 minutes)...")
             wait_request = compute_v1.WaitZoneOperationRequest()
             wait_request.project = self.project_id
             wait_request.zone = self.zone
             wait_request.operation = operation.name
             self.operations_client.wait(request=wait_request)
 
-            trace.log("GCE VM created", name=config.name)
+            trace.log("GCE VM created successfully", name=config.name)
 
             # Get the created instance
+            trace.log("Fetching VM details...")
             return await self.get_vm_status(config.name, session=session)
 
     async def delete_vm(self, vm_id: str, session: Session | None = None) -> None:
         """Delete a GCP Compute Engine instance."""
         with FunctionTrace(session, "Deleting GCE VM", vm_id=vm_id) as trace:
+            trace.log("Sending delete request to GCP...")
             request = compute_v1.DeleteInstanceRequest()
             request.project = self.project_id
             request.zone = self.zone
@@ -163,17 +172,19 @@ class GCPVMProvider(VMProvider):
             operation = self.instances_client.delete(request=request)
 
             # Wait for operation to complete
+            trace.log("Waiting for VM termination to complete...")
             wait_request = compute_v1.WaitZoneOperationRequest()
             wait_request.project = self.project_id
             wait_request.zone = self.zone
             wait_request.operation = operation.name
             self.operations_client.wait(request=wait_request)
 
-            trace.log("GCE VM deleted", vm_id=vm_id)
+            trace.log("GCE VM deleted successfully", vm_id=vm_id)
 
     async def start_vm(self, vm_id: str, session: Session | None = None) -> None:
         """Start a stopped GCP Compute Engine instance."""
         with FunctionTrace(session, "Starting GCE VM", vm_id=vm_id) as trace:
+            trace.log("Sending start request to GCP...")
             request = compute_v1.StartInstanceRequest()
             request.project = self.project_id
             request.zone = self.zone
@@ -181,17 +192,19 @@ class GCPVMProvider(VMProvider):
 
             operation = self.instances_client.start(request=request)
 
+            trace.log("Waiting for VM to boot up...")
             wait_request = compute_v1.WaitZoneOperationRequest()
             wait_request.project = self.project_id
             wait_request.zone = self.zone
             wait_request.operation = operation.name
             self.operations_client.wait(request=wait_request)
 
-            trace.log("GCE VM started", vm_id=vm_id)
+            trace.log("GCE VM started successfully", vm_id=vm_id)
 
     async def stop_vm(self, vm_id: str, session: Session | None = None) -> None:
         """Stop a running GCP Compute Engine instance."""
         with FunctionTrace(session, "Stopping GCE VM", vm_id=vm_id) as trace:
+            trace.log("Sending stop request to GCP...")
             request = compute_v1.StopInstanceRequest()
             request.project = self.project_id
             request.zone = self.zone
@@ -199,13 +212,14 @@ class GCPVMProvider(VMProvider):
 
             operation = self.instances_client.stop(request=request)
 
+            trace.log("Waiting for VM to shut down gracefully...")
             wait_request = compute_v1.WaitZoneOperationRequest()
             wait_request.project = self.project_id
             wait_request.zone = self.zone
             wait_request.operation = operation.name
             self.operations_client.wait(request=wait_request)
 
-            trace.log("GCE VM stopped", vm_id=vm_id)
+            trace.log("GCE VM stopped successfully", vm_id=vm_id)
 
     async def get_vm_status(
         self, vm_id: str, session: Session | None = None
