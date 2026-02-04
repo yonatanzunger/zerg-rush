@@ -1,6 +1,7 @@
 """OpenClaw agent platform implementation."""
 
 from app.agents.base import AgentPlatform
+from app.models.user import User
 
 
 class OpenClawPlatform(AgentPlatform):
@@ -13,16 +14,20 @@ class OpenClawPlatform(AgentPlatform):
     def platform_type(self) -> str:
         return "openclaw"
 
-    def get_startup_script(self, version: str | None = None) -> str:
+    def get_startup_script(self, user: "User", version: str | None = None) -> str:
         """Get the startup script for OpenClaw platform.
 
         Args:
+            user: The current user requesting the agent.
             version: Optional specific version to install. If None, installs latest.
 
         Returns:
             Bash startup script that installs Node.js, pnpm, and OpenClaw.
         """
-        version_spec = f"openclaw@{version}" if version else "openclaw@latest"
+        # TODO: Need to implement the actual openclaw onboarding logic, including
+        # getting the appropriate keys from the LLM, setting up the config, etc.,
+        # and then starting the server. It may make sense to construct the json
+        # file locally in the server and ship it over.
 
         return f"""#!/bin/bash
 set -e
@@ -35,20 +40,19 @@ apt-get install -y curl
 curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
 apt-get install -y nodejs
 
-# Install pnpm
-npm install -g pnpm
+# Make sure the user is ready to go
+useradd -m -s /bin/bash {user.name} || true
 
-# Install openclaw
-pnpm add -g {version_spec}
-
-# Create openclaw user
-useradd -m -s /bin/bash openclaw || true
-
-# Create config directory
-sudo -u openclaw mkdir -p /home/openclaw/.openclaw
-
-# Signal that setup is complete
-touch /home/openclaw/.openclaw/setup-complete
+# Switch to user context
+sudo -u {user.name} bash << 'EOF'
+  cd ~
+  # Install pnpm
+  curl -fsSL https://get.pnpm.io/install.sh | sh -"
+  export PNPM_HOME="$HOME/.local/share/pnpm"
+  export PATH="$PNPM_HOME:$PATH"
+  # Install openclaw
+  curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-prompt --install-method npm --no-onboard
+EOF
 """
 
     def get_health_check_command(self) -> str | None:

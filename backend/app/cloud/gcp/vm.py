@@ -106,6 +106,7 @@ class GCPVMProvider(VMProvider):
             # Network interface
             trace.log("Configuring network interface...")
             network_interface = compute_v1.NetworkInterface()
+            # Create external network config. TODO: Decide if we really need this.
             network_interface.access_configs = [
                 compute_v1.AccessConfig(
                     type_="ONE_TO_ONE_NAT",
@@ -151,7 +152,9 @@ class GCPVMProvider(VMProvider):
             )
 
             # Wait for operation to complete
-            trace.log("Waiting for VM provisioning to complete (this may take 1-2 minutes)...")
+            trace.log(
+                "Waiting for VM provisioning to complete (this may take 1-2 minutes)..."
+            )
             wait_request = compute_v1.WaitZoneOperationRequest()
             wait_request.project = self.project_id
             wait_request.zone = self.zone

@@ -2,6 +2,10 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.models.user import User
 
 
 @dataclass
@@ -32,10 +36,11 @@ class AgentPlatform(ABC):
         return None
 
     @abstractmethod
-    def get_startup_script(self, version: str | None = None) -> str:
+    def get_startup_script(self, user: "User", version: str | None = None) -> str:
         """Get the VM startup script for this platform.
 
         Args:
+            user: The current user requesting the agent.
             version: Optional specific version to install. If None, uses latest.
 
         Returns:

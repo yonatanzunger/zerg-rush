@@ -195,7 +195,7 @@ async def create_agent(
                 image="default",
                 user_id=current_user.id,
                 agent_id=agent_id,
-                startup_script=get_platform(body.platform_type).get_startup_script(),
+                startup_script=get_platform(body.platform_type).get_startup_script(current_user),
             )
             vm_instance = await providers.vm.create_vm(vm_config, session=session)
         except Exception as e:
@@ -739,7 +739,7 @@ async def create_agent_streaming(
                         image="default",
                         user_id=current_user.id,
                         agent_id=agent_id,
-                        startup_script=get_platform(body.platform_type).get_startup_script(),
+                        startup_script=get_platform(body.platform_type).get_startup_script(current_user),
                     )
                     vm_instance = await providers.vm.create_vm(vm_config, session=session)
                     session.log("VM created successfully", vm_id=vm_instance.vm_id)
