@@ -6,6 +6,10 @@ import { agents } from '../services/api'
 import Button from '../components/common/Button'
 import Card, { CardBody, CardHeader } from '../components/common/Card'
 import StatusBadge from '../components/common/StatusBadge'
+import Modal from '../components/common/Modal'
+import OperationProgress from '../components/common/OperationProgress'
+import { useStreamingOperation } from '../hooks/useStreamingOperation'
+import type { Agent } from '../types'
 
 export default function AgentDetail() {
   const { agentId } = useParams<{ agentId: string }>()
@@ -13,26 +17,17 @@ export default function AgentDetail() {
   const queryClient = useQueryClient()
   const [chatMessage, setChatMessage] = useState('')
   const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'agent'; content: string }[]>([])
+  const [isProgressModalOpen, setIsProgressModalOpen] = useState(false)
+  const [progressTitle, setProgressTitle] = useState('')
+
+  // Streaming operation hook for long-running operations
+  const streamingOp = useStreamingOperation<Agent>()
 
   const { data: agent, isLoading } = useQuery({
     queryKey: ['agent', agentId],
     queryFn: () => agents.get(agentId!),
     enabled: !!agentId,
     refetchInterval: 5000, // Poll for status updates
-  })
-
-  const startMutation = useMutation({
-    mutationFn: () => agents.start(agentId!),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['agent', agentId] })
-    },
-  })
-
-  const stopMutation = useMutation({
-    mutationFn: () => agents.stop(agentId!),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['agent', agentId] })
-    },
   })
 
   const archiveMutation = useMutation({
@@ -43,12 +38,54 @@ export default function AgentDetail() {
     },
   })
 
-  const deleteMutation = useMutation({
-    mutationFn: () => agents.delete(agentId!),
-    onSuccess: () => {
-      navigate('/dashboard')
-    },
-  })
+  // Handle streaming agent start
+  const handleStartStreaming = async () => {
+    if (!agent) return
+    setProgressTitle(`Starting agent "${agent.name}"...`)
+    setIsProgressModalOpen(true)
+    streamingOp.reset()
+
+    const result = await streamingOp.executePost(agents.streaming.startUrl(agentId!))
+
+    if (result) {
+      queryClient.invalidateQueries({ queryKey: ['agent', agentId] })
+    }
+  }
+
+  // Handle streaming agent stop
+  const handleStopStreaming = async () => {
+    if (!agent) return
+    setProgressTitle(`Stopping agent "${agent.name}"...`)
+    setIsProgressModalOpen(true)
+    streamingOp.reset()
+
+    const result = await streamingOp.executePost(agents.streaming.stopUrl(agentId!))
+
+    if (result) {
+      queryClient.invalidateQueries({ queryKey: ['agent', agentId] })
+    }
+  }
+
+  // Handle streaming agent deletion
+  const handleDeleteStreaming = async () => {
+    if (!agent) return
+    if (!confirm('Are you sure you want to delete this agent? This cannot be undone.')) {
+      return
+    }
+
+    setProgressTitle(`Deleting agent "${agent.name}"...`)
+    setIsProgressModalOpen(true)
+    streamingOp.reset()
+
+    const success = await streamingOp.executeDelete(agents.streaming.deleteUrl(agentId!))
+
+    // Invalidate and navigate on success
+    queryClient.invalidateQueries({ queryKey: ['agents'] })
+    if (success) {
+      // Delay navigation slightly to let user see completion
+      setTimeout(() => navigate('/dashboard'), 1500)
+    }
+  }
 
   const chatMutation = useMutation({
     mutationFn: (message: string) => agents.chat(agentId!, message),
@@ -109,13 +146,13 @@ export default function AgentDetail() {
               <RefreshCw className="h-4 w-4" />
             </Button>
             {agent.vm_status === 'stopped' && (
-              <Button onClick={() => startMutation.mutate()} isLoading={startMutation.isPending}>
+              <Button onClick={handleStartStreaming} isLoading={streamingOp.isLoading}>
                 <Play className="h-4 w-4 mr-2" />
                 Start
               </Button>
             )}
             {agent.vm_status === 'running' && (
-              <Button variant="secondary" onClick={() => stopMutation.mutate()} isLoading={stopMutation.isPending}>
+              <Button variant="secondary" onClick={handleStopStreaming} isLoading={streamingOp.isLoading}>
                 <Square className="h-4 w-4 mr-2" />
                 Stop
               </Button>
@@ -126,12 +163,8 @@ export default function AgentDetail() {
             </Button>
             <Button
               variant="danger"
-              onClick={() => {
-                if (confirm('Are you sure you want to delete this agent? This cannot be undone.')) {
-                  deleteMutation.mutate()
-                }
-              }}
-              isLoading={deleteMutation.isPending}
+              onClick={handleDeleteStreaming}
+              isLoading={streamingOp.isLoading}
             >
               <Trash2 className="h-4 w-4 mr-2" />
               Delete
@@ -286,6 +319,34 @@ export default function AgentDetail() {
           )}
         </Card>
       </div>
+
+      {/* Progress Modal for streaming operations */}
+      <Modal
+        isOpen={isProgressModalOpen}
+        onClose={() => {
+          if (!streamingOp.isLoading) {
+            setIsProgressModalOpen(false)
+          }
+        }}
+        title={progressTitle}
+      >
+        <OperationProgress
+          events={streamingOp.events}
+          isLoading={streamingOp.isLoading}
+          error={streamingOp.error}
+          isComplete={!!streamingOp.result || (streamingOp.events.some(e => e.type === 'complete') && !streamingOp.error)}
+          maxHeight="400px"
+        />
+        <div className="mt-4 flex justify-end">
+          <Button
+            variant={streamingOp.error ? 'secondary' : 'primary'}
+            onClick={() => setIsProgressModalOpen(false)}
+            disabled={streamingOp.isLoading}
+          >
+            {streamingOp.isLoading ? 'Please wait...' : streamingOp.error ? 'Close' : 'Done'}
+          </Button>
+        </div>
+      </Modal>
     </div>
   )
 }

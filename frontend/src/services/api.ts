@@ -2,7 +2,6 @@ import axios from 'axios'
 import type {
   User,
   Agent,
-  CreateAgentRequest,
   AgentListResponse,
   SavedAgent,
   SavedAgentListResponse,
@@ -53,18 +52,6 @@ export const agents = {
 
   get: (id: string) =>
     api.get<Agent>(`/agents/${id}`).then((r) => r.data),
-
-  create: (data: CreateAgentRequest) =>
-    api.post<Agent>('/agents', data).then((r) => r.data),
-
-  delete: (id: string) =>
-    api.delete(`/agents/${id}`),
-
-  start: (id: string) =>
-    api.post<Agent>(`/agents/${id}/start`).then((r) => r.data),
-
-  stop: (id: string) =>
-    api.post<Agent>(`/agents/${id}/stop`).then((r) => r.data),
 
   getStatus: (id: string) =>
     api.get<Agent>(`/agents/${id}/status`).then((r) => r.data),

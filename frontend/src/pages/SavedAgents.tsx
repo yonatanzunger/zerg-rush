@@ -1,11 +1,21 @@
+import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Star, Copy, Trash2, Play } from 'lucide-react'
 import { savedAgents, agents } from '../services/api'
 import Button from '../components/common/Button'
 import Card, { CardBody } from '../components/common/Card'
+import Modal from '../components/common/Modal'
+import OperationProgress from '../components/common/OperationProgress'
+import { useStreamingOperation } from '../hooks/useStreamingOperation'
+import type { Agent } from '../types'
 
 export default function SavedAgents() {
   const queryClient = useQueryClient()
+  const [isProgressModalOpen, setIsProgressModalOpen] = useState(false)
+  const [progressTitle, setProgressTitle] = useState('')
+
+  // Streaming operation hook for deploy
+  const streamingOp = useStreamingOperation<Agent>()
 
   const { data, isLoading } = useQuery({
     queryKey: ['saved-agents'],
@@ -34,17 +44,22 @@ export default function SavedAgents() {
     },
   })
 
-  const deployMutation = useMutation({
-    mutationFn: (template: { id: string; name: string; platform_type: string }) =>
-      agents.create({
-        name: `${template.name} Agent`,
-        platform_type: template.platform_type,
-        template_id: template.id,
-      }),
-    onSuccess: () => {
+  // Handle streaming deploy from template
+  const handleDeployStreaming = async (template: { id: string; name: string; platform_type: string }) => {
+    setProgressTitle(`Deploying "${template.name}"...`)
+    setIsProgressModalOpen(true)
+    streamingOp.reset()
+
+    const result = await streamingOp.executePost(agents.streaming.createUrl(), {
+      name: `${template.name} Agent`,
+      platform_type: template.platform_type,
+      template_id: template.id,
+    })
+
+    if (result) {
       queryClient.invalidateQueries({ queryKey: ['agents'] })
-    },
-  })
+    }
+  }
 
   if (isLoading) {
     return (
@@ -99,13 +114,13 @@ export default function SavedAgents() {
                   <Button
                     size="sm"
                     onClick={() =>
-                      deployMutation.mutate({
+                      handleDeployStreaming({
                         id: saved.id,
                         name: saved.name,
                         platform_type: saved.platform_type,
                       })
                     }
-                    isLoading={deployMutation.isPending}
+                    isLoading={streamingOp.isLoading}
                   >
                     <Play className="h-4 w-4 mr-1" />
                     Deploy
@@ -136,6 +151,34 @@ export default function SavedAgents() {
           ))}
         </div>
       )}
+
+      {/* Progress Modal for streaming operations */}
+      <Modal
+        isOpen={isProgressModalOpen}
+        onClose={() => {
+          if (!streamingOp.isLoading) {
+            setIsProgressModalOpen(false)
+          }
+        }}
+        title={progressTitle}
+      >
+        <OperationProgress
+          events={streamingOp.events}
+          isLoading={streamingOp.isLoading}
+          error={streamingOp.error}
+          isComplete={!!streamingOp.result || (streamingOp.events.some(e => e.type === 'complete') && !streamingOp.error)}
+          maxHeight="400px"
+        />
+        <div className="mt-4 flex justify-end">
+          <Button
+            variant={streamingOp.error ? 'secondary' : 'primary'}
+            onClick={() => setIsProgressModalOpen(false)}
+            disabled={streamingOp.isLoading}
+          >
+            {streamingOp.isLoading ? 'Please wait...' : streamingOp.error ? 'Close' : 'Done'}
+          </Button>
+        </div>
+      </Modal>
     </div>
   )
 }
