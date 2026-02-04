@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.agents import get_platform
 from app.api.dependencies import (
     CurrentUser,
     DbSession,
@@ -82,40 +83,6 @@ class ChatResponse(BaseModel):
     """Response from agent chat."""
 
     response: str
-
-
-# Helper functions
-def get_startup_script(platform_type: str, platform_version: str | None = None) -> str:
-    """Get the startup script for an agent platform."""
-    if platform_type == "openclaw":
-        return """#!/bin/bash
-set -e
-
-# Update system
-apt-get update
-apt-get install -y curl
-
-# Install Node.js 22
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-apt-get install -y nodejs
-
-# Install pnpm
-npm install -g pnpm
-
-# Install openclaw
-pnpm add -g openclaw@latest
-
-# Create openclaw user
-useradd -m -s /bin/bash openclaw || true
-
-# Create config directory
-sudo -u openclaw mkdir -p /home/openclaw/.openclaw
-
-# Signal that setup is complete
-touch /home/openclaw/.openclaw/setup-complete
-"""
-    else:
-        raise ValueError(f"Unknown platform type: {platform_type}")
 
 
 # Routes
@@ -228,7 +195,7 @@ async def create_agent(
                 image="default",
                 user_id=current_user.id,
                 agent_id=agent_id,
-                startup_script=get_startup_script(body.platform_type),
+                startup_script=get_platform(body.platform_type).get_startup_script(),
             )
             vm_instance = await providers.vm.create_vm(vm_config, session=session)
         except Exception as e:
@@ -772,7 +739,7 @@ async def create_agent_streaming(
                         image="default",
                         user_id=current_user.id,
                         agent_id=agent_id,
-                        startup_script=get_startup_script(body.platform_type),
+                        startup_script=get_platform(body.platform_type).get_startup_script(),
                     )
                     vm_instance = await providers.vm.create_vm(vm_config, session=session)
                     session.log("VM created successfully", vm_id=vm_instance.vm_id)
