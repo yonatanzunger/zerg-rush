@@ -2,10 +2,10 @@
 
 from typing import TYPE_CHECKING, Literal
 
-from sqlalchemy import ForeignKey, String, Text, Uuid
+from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, TimestampMixin, UUIDMixin
+from app.models.base import Base, StringUUID, TimestampMixin, UUIDMixin
 
 if TYPE_CHECKING:
     from app.models.user import User
@@ -19,7 +19,7 @@ class Credential(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "credentials"
 
     user_id: Mapped[str] = mapped_column(
-        Uuid(as_uuid=False), ForeignKey("users.id"), nullable=False
+        StringUUID(), ForeignKey("users.id"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     type: Mapped[str] = mapped_column(String(50), nullable=False)  # llm, cloud, utility

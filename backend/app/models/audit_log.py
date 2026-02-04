@@ -2,10 +2,10 @@
 
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, Uuid, event, func
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, event, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base
+from app.models.base import Base, StringUUID
 
 
 class AuditLog(Base):
@@ -14,13 +14,13 @@ class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id: Mapped[str] = mapped_column(
-        Uuid(as_uuid=False),
+        StringUUID(),
         primary_key=True,
     )
-    user_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), ForeignKey("users.id"), nullable=False)
+    user_id: Mapped[str] = mapped_column(StringUUID(), ForeignKey("users.id"), nullable=False)
     action_type: Mapped[str] = mapped_column(String(100), nullable=False)
     target_type: Mapped[str | None] = mapped_column(String(50))
-    target_id: Mapped[str | None] = mapped_column(Uuid(as_uuid=False))
+    target_id: Mapped[str | None] = mapped_column(StringUUID())
     details: Mapped[dict | None] = mapped_column(JSON)
     ip_address: Mapped[str | None] = mapped_column(String(45))
     timestamp: Mapped[datetime] = mapped_column(

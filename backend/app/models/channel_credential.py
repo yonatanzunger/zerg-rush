@@ -3,10 +3,10 @@
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Uuid
+from sqlalchemy import Boolean, DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, TimestampMixin, UUIDMixin
+from app.models.base import Base, StringUUID, TimestampMixin, UUIDMixin
 
 if TYPE_CHECKING:
     from app.models.agent import ActiveAgent
@@ -23,7 +23,7 @@ class ChannelCredential(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "channel_credentials"
 
     agent_id: Mapped[str] = mapped_column(
-        Uuid(as_uuid=False),
+        StringUUID(),
         ForeignKey("active_agents.id", ondelete="CASCADE"),
         nullable=False,
     )

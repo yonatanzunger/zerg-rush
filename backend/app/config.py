@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     )
     gcp_agent_network: str = "default"  # For GCE VMs; "default" or a custom VPC
     gcp_agent_subnet: str = "default"  # For GCE VMs; "default" or a custom subnet
+    # Service account email for IAM signing (used when signing URLs with user credentials)
+    gcp_service_account_email: str | None = None
 
     # Cloud Run specific settings
     gcp_vpc_connector: str | None = (

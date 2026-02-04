@@ -4,6 +4,8 @@ import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 
+from google.auth import iam
+from google.auth.transport import requests as google_requests
 from google.cloud import storage
 from google.cloud import iam_credentials_v1
 from google.oauth2 import service_account
@@ -19,6 +21,17 @@ from app.config import get_settings
 from app.tracing import Session, FunctionTrace
 
 
+def _credentials_can_sign(credentials) -> bool:
+    """Check if credentials have signing capability (private key)."""
+    # Service account credentials have a signer attribute
+    if hasattr(credentials, "signer") and credentials.signer is not None:
+        return True
+    # Some credentials have sign_bytes method directly
+    if hasattr(credentials, "sign_bytes") and callable(credentials.sign_bytes):
+        return True
+    return False
+
+
 class GCPStorageProvider(StorageProvider):
     """GCP Cloud Storage implementation of StorageProvider."""
 
@@ -31,19 +44,31 @@ class GCPStorageProvider(StorageProvider):
         """
         settings = get_settings()
         self.location = settings.gcp_region
+        self._using_user_credentials = False
+        self._service_account_email = settings.gcp_service_account_email
+        self._can_sign_directly = False
+        self._adc_credentials = None
 
         if user_credentials:
-            # Use user OAuth credentials
+            # Use user OAuth credentials (cannot sign directly)
             credentials = OAuthCredentials(token=user_credentials.access_token)
             self.project_id = user_credentials.project_id or settings.gcp_project_id
             self.client = storage.Client(
                 project=self.project_id,
                 credentials=credentials,
             )
+            self._using_user_credentials = True
+            self._user_credentials = credentials
         else:
             # Fall back to application default credentials (for system operations)
             self.project_id = settings.gcp_project_id
             self.client = storage.Client(project=self.project_id)
+            self._user_credentials = None
+
+            # Check if ADC can sign directly (e.g., service account key file)
+            # Store ADC for potential signing use
+            self._adc_credentials = self.client._credentials
+            self._can_sign_directly = _credentials_can_sign(self._adc_credentials)
 
     def _get_bucket_name(self, name: str, user_id: str) -> str:
         """Generate a unique bucket name."""
@@ -213,15 +238,67 @@ class GCPStorageProvider(StorageProvider):
         expires_in: int = 3600,
         session: Session | None = None,
     ) -> str:
-        """Get a signed URL for an object."""
+        """Get a signed URL for an object.
+
+        Signing strategy:
+        1. If ADC has signing capability (service account key), sign directly
+        2. If using user OAuth credentials or ADC without signing capability,
+           use IAM Credentials API to sign on behalf of the configured service account
+
+        For IAM signing, the caller must have iam.serviceAccounts.signBlob permission
+        on the configured service account.
+        """
         bucket = self.client.bucket(bucket_id)
         blob = bucket.blob(key)
+
+        # Case 1: ADC can sign directly (service account with key file)
+        if not self._using_user_credentials and self._can_sign_directly:
+            url = await asyncio.to_thread(
+                blob.generate_signed_url,
+                version="v4",
+                expiration=timedelta(seconds=expires_in),
+                method="GET",
+            )
+            return url
+
+        # Case 2 & 3: Need IAM signing (user credentials or ADC without signing)
+        if not self._service_account_email:
+            raise ValueError(
+                "GCP_SERVICE_ACCOUNT_EMAIL must be configured to sign URLs "
+                "when credentials don't have signing capability. "
+                "Either run Zerg Rush with a service account key file, "
+                "or configure a signing service account. See README.md for setup."
+            )
+
+        # Determine which credentials to use for calling IAM signBlob API
+        if self._using_user_credentials:
+            # Use user's OAuth token to call IAM API
+            signing_caller_credentials = self._user_credentials
+        else:
+            # Use ADC to call IAM API (e.g., compute engine default service account)
+            signing_caller_credentials = self._adc_credentials
+
+        # Create an IAM signer that uses the signBlob API
+        signer = iam.Signer(
+            request=google_requests.Request(),
+            credentials=signing_caller_credentials,
+            service_account_email=self._service_account_email,
+        )
+
+        # Create signing credentials using the IAM signer
+        signing_credentials = service_account.Credentials(
+            signer=signer,
+            service_account_email=self._service_account_email,
+            token_uri="https://oauth2.googleapis.com/token",
+            project_id=self.project_id,
+        )
 
         url = await asyncio.to_thread(
             blob.generate_signed_url,
             version="v4",
             expiration=timedelta(seconds=expires_in),
             method="GET",
+            credentials=signing_credentials,
         )
 
         return url

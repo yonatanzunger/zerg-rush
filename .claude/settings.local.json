@@ -9,7 +9,9 @@
       "Bash(find:*)",
       "Bash(tree:*)",
       "Bash(npx tsc --noEmit)",
-      "Bash(python -m py_compile:*)"
+      "Bash(python -m py_compile:*)",
+      "Bash(alembic current:*)",
+      "Bash(alembic stamp:*)"
     ]
   },
   "enabledPlugins": {

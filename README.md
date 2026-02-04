@@ -129,8 +129,13 @@ npm run dev
 | `SECRET_KEY` | JWT signing key | (required) |
 | `CLOUD_PROVIDER` | Cloud provider (`gcp`, `aws`, `azure`) | `gcp` |
 | `GCP_PROJECT_ID` | GCP project ID | (required for GCP) |
+| `GCP_REGION` | GCP region for resources | `us-central1` |
+| `GCP_ZONE` | GCP zone for VMs | `us-central1-a` |
+| `GCP_COMPUTE_TYPE` | Compute type (`gce` or `cloudrun`) | `cloudrun` |
+| `GCP_SERVICE_ACCOUNT_EMAIL` | Service account for URL signing | (optional, see Cloud Setup) |
 | `GOOGLE_CLIENT_ID` | OAuth client ID | (required) |
 | `GOOGLE_CLIENT_SECRET` | OAuth client secret | (required) |
+| `OAUTH_REDIRECT_URI` | OAuth callback URL | `http://localhost:8000/auth/callback` |
 | `FRONTEND_URL` | Frontend URL for CORS/redirects | `http://localhost:3000` |
 
 ## Project Structure
@@ -157,20 +162,202 @@ zerg-rush/
 └── docker-compose.yml
 ```
 
-## User Cloud Requirements
+## Cloud Setup
 
-All cloud operations are performed using **your OAuth credentials**, not application-level credentials. This provides better security isolation and audit trails.
+Zerg Rush supports two authentication modes for GCP. Choose the one that fits your needs.
 
-### GCP Users
+### GCP Setup
 
-You need these IAM roles in your GCP project:
-- `roles/compute.admin` - Manage agent VMs
-- `roles/run.admin` - Manage Cloud Run services
-- `roles/storage.admin` - Manage storage buckets
-- `roles/secretmanager.admin` - Manage secrets
-- `roles/iam.serviceAccountUser` - Attach service accounts
+#### 1. Create a GCP Project
 
-### Azure Users
+If you don't have one already, create a GCP project:
+
+```bash
+gcloud projects create YOUR_PROJECT_ID --name="Zerg Rush"
+gcloud config set project YOUR_PROJECT_ID
+```
+
+#### 2. Enable Required APIs
+
+```bash
+gcloud services enable \
+  compute.googleapis.com \
+  run.googleapis.com \
+  storage.googleapis.com \
+  secretmanager.googleapis.com \
+  iam.googleapis.com \
+  iamcredentials.googleapis.com
+```
+
+#### 3. Create OAuth 2.0 Credentials (for user login)
+
+1. Go to the [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
+2. Click **Create Credentials** → **OAuth client ID**
+3. Configure the consent screen if prompted:
+   - User Type: **Internal** (for organization) or **External** (for testing)
+   - Add scopes: `openid`, `email`, `profile`, and `https://www.googleapis.com/auth/cloud-platform`
+4. Create OAuth client:
+   - Application type: **Web application**
+   - Name: `Zerg Rush`
+   - Authorized redirect URIs: `http://localhost:8000/auth/callback` (add production URLs as needed)
+5. Save the **Client ID** and **Client Secret**
+
+#### 4. Choose Authentication Mode
+
+Zerg Rush needs to sign URLs for secure credential delivery to VMs. There are two ways to enable this:
+
+---
+
+**Option A: Service Account Key (Simpler Setup)**
+
+Run Zerg Rush with a service account that has a key file. This is simpler but means cloud operations are performed as the service account, not individual users.
+
+```bash
+PROJECT_ID=$(gcloud config get-value project)
+
+# Create a service account for Zerg Rush
+gcloud iam service-accounts create zerg-rush \
+  --display-name="Zerg Rush Service Account"
+
+SERVICE_ACCOUNT="zerg-rush@${PROJECT_ID}.iam.gserviceaccount.com"
+
+# Grant required permissions
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:${SERVICE_ACCOUNT}" \
+  --role="roles/compute.admin"
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:${SERVICE_ACCOUNT}" \
+  --role="roles/storage.admin"
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:${SERVICE_ACCOUNT}" \
+  --role="roles/secretmanager.admin"
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:${SERVICE_ACCOUNT}" \
+  --role="roles/iam.serviceAccountUser"
+
+# Create and download a key file
+gcloud iam service-accounts keys create ~/zerg-rush-key.json \
+  --iam-account=$SERVICE_ACCOUNT
+
+# Set the environment variable (add to your shell profile)
+export GOOGLE_APPLICATION_CREDENTIALS=~/zerg-rush-key.json
+```
+
+With this setup, you do **not** need to set `GCP_SERVICE_ACCOUNT_EMAIL`.
+
+---
+
+**Option B: User OAuth Credentials with Signing Delegation (Better Audit Trail)**
+
+Cloud operations are performed using each user's OAuth credentials, providing better audit trails. This requires a separate service account for URL signing.
+
+**Create the signing service account:**
+
+```bash
+PROJECT_ID=$(gcloud config get-value project)
+
+# Create a service account just for signing URLs
+gcloud iam service-accounts create zerg-rush-signer \
+  --display-name="Zerg Rush URL Signer"
+
+SIGNER_SA="zerg-rush-signer@${PROJECT_ID}.iam.gserviceaccount.com"
+
+# Allow the signer to read storage objects (required for signed URLs)
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:${SIGNER_SA}" \
+  --role="roles/storage.objectViewer"
+```
+
+**Grant users permission to use the signing service account:**
+
+For each user who will use Zerg Rush:
+
+```bash
+USER_EMAIL="user@example.com"
+
+# Allow user to sign blobs using the service account
+gcloud iam service-accounts add-iam-policy-binding $SIGNER_SA \
+  --member="user:${USER_EMAIL}" \
+  --role="roles/iam.serviceAccountTokenCreator"
+```
+
+**Grant users permission to manage cloud resources:**
+
+```bash
+USER_EMAIL="user@example.com"
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="user:${USER_EMAIL}" \
+  --role="roles/compute.admin"
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="user:${USER_EMAIL}" \
+  --role="roles/storage.admin"
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="user:${USER_EMAIL}" \
+  --role="roles/secretmanager.admin"
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="user:${USER_EMAIL}" \
+  --role="roles/iam.serviceAccountUser"
+```
+
+Set `GCP_SERVICE_ACCOUNT_EMAIL` in your `.env` to the signer service account email.
+
+---
+
+#### 5. Configure Environment Variables
+
+Add these to your `backend/.env` file:
+
+```bash
+# Cloud provider
+CLOUD_PROVIDER=gcp
+
+# GCP settings
+GCP_PROJECT_ID=your-project-id
+GCP_REGION=us-central1
+GCP_ZONE=us-central1-a
+GCP_COMPUTE_TYPE=gce
+
+# Service account for URL signing (Option B only - omit for Option A)
+GCP_SERVICE_ACCOUNT_EMAIL=zerg-rush-signer@your-project-id.iam.gserviceaccount.com
+
+# OAuth credentials (from step 3)
+GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-client-secret
+OAUTH_REDIRECT_URI=http://localhost:8000/auth/callback
+```
+
+#### Summary: Required Permissions by Mode
+
+**Option A (Service Account Key):**
+
+| Role | Granted To |
+|------|------------|
+| `roles/compute.admin` | Service account |
+| `roles/storage.admin` | Service account |
+| `roles/secretmanager.admin` | Service account |
+| `roles/iam.serviceAccountUser` | Service account |
+
+**Option B (User OAuth):**
+
+| Role | Granted To |
+|------|------------|
+| `roles/compute.admin` | Each user |
+| `roles/storage.admin` | Each user |
+| `roles/secretmanager.admin` | Each user |
+| `roles/iam.serviceAccountUser` | Each user |
+| `roles/storage.objectViewer` | Signer service account |
+| `roles/iam.serviceAccountTokenCreator` | Each user (on signer SA) |
+
+### Azure Setup
+
+#### Required RBAC Roles
 
 You need these RBAC roles in your resource group:
 - `Contributor` - Create/manage resources

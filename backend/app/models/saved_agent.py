@@ -2,10 +2,10 @@
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import JSON, Boolean, ForeignKey, String, Text, Uuid
+from sqlalchemy import JSON, Boolean, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, TimestampMixin, UUIDMixin
+from app.models.base import Base, StringUUID, TimestampMixin, UUIDMixin
 
 if TYPE_CHECKING:
     from app.models.user import User
@@ -19,16 +19,16 @@ class SavedAgent(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "saved_agents"
 
     user_id: Mapped[str] = mapped_column(
-        Uuid(as_uuid=False), ForeignKey("users.id"), nullable=False
+        StringUUID(), ForeignKey("users.id"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     platform_type: Mapped[str] = mapped_column(String(50), nullable=False)
     setup_script_id: Mapped[str | None] = mapped_column(
-        Uuid(as_uuid=False), ForeignKey("setup_scripts.id")
+        StringUUID(), ForeignKey("setup_scripts.id")
     )
     config_snapshot: Mapped[dict | None] = mapped_column(JSON)
     is_starred: Mapped[bool] = mapped_column(Boolean, default=False)
-    source_agent_id: Mapped[str | None] = mapped_column(Uuid(as_uuid=False))
+    source_agent_id: Mapped[str | None] = mapped_column(StringUUID())
     description: Mapped[str | None] = mapped_column(Text)
 
     # State restoration fields for hatching

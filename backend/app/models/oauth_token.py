@@ -3,10 +3,10 @@
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, TimestampMixin, UUIDMixin
+from app.models.base import Base, StringUUID, TimestampMixin, UUIDMixin
 
 if TYPE_CHECKING:
     from app.models.user import User
@@ -26,7 +26,7 @@ class UserOAuthToken(Base, UUIDMixin, TimestampMixin):
 
     # Foreign key to user
     user_id: Mapped[str] = mapped_column(
-        Uuid(as_uuid=False),
+        StringUUID(),
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )

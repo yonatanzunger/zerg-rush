@@ -641,9 +641,11 @@ async def create_agent_streaming(
                         hatching_status=initial_hatching_status,
                     )
                     db.add(agent)
+                    await db.flush()  # Flush agent first to establish the FK target
 
                     # Save agent config
                     agent_config = AgentConfig(
+                        id=str(uuid4()),
                         agent_id=agent_id,
                         config_template=config_template,
                         gateway_port=gateway_port,
@@ -655,6 +657,7 @@ async def create_agent_streaming(
 
                     # Save manifest steps
                     for step in manifest_steps:
+                        step.id = str(uuid4())
                         step.agent_id = agent_id
                         db.add(step)
 

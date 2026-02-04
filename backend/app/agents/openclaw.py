@@ -32,7 +32,7 @@ class OpenClawPlatform(AgentPlatform):
             Bash startup script that installs and configures OpenClaw.
         """
         gateway_port = config.gateway_port if config else self.get_default_gateway_port()
-        username = self._sanitize_username(user.name)
+        username = self._username_from_email(user.email)
 
         # Build the bundle download section if credentials are provided
         bundle_section = ""
@@ -133,13 +133,23 @@ systemctl start openclaw || true
 echo "=== OpenClaw startup complete at $(date) ==="
 """
 
-    def _sanitize_username(self, name: str) -> str:
-        """Sanitize username for use in shell script."""
-        # Remove any characters that aren't alphanumeric, underscore, or hyphen
-        sanitized = "".join(c for c in name if c.isalnum() or c in "_-")
+    def _username_from_email(self, email: str) -> str:
+        """Extract and sanitize username from email address.
+
+        This creates a username that matches what cloud providers use for SSH access.
+        For example, "john.doe@example.com" becomes "john_doe".
+        """
+        # Extract the local part (before @)
+        local_part = email.split("@")[0] if "@" in email else email
+        # Replace dots and other common separators with underscores
+        sanitized = local_part.replace(".", "_").replace("-", "_").replace("+", "_")
+        # Remove any characters that aren't alphanumeric or underscore
+        sanitized = "".join(c for c in sanitized if c.isalnum() or c == "_")
         # Ensure it doesn't start with a number
         if sanitized and sanitized[0].isdigit():
             sanitized = "u" + sanitized
+        # Lowercase for consistency
+        sanitized = sanitized.lower()
         # Default if empty
         return sanitized or "openclaw"
 
