@@ -212,6 +212,21 @@ if ($LASTEXITCODE -ne 0) {
     Write-Success "Dependencies installed"
 }
 
+# Run database migrations
+Write-Status "Running database migrations..."
+Push-Location $backendDir
+try {
+    & $venvPython -c "from app.db.session import run_migrations; run_migrations()"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Failure "Database migrations failed"
+        exit 1
+    }
+    Write-Success "Database migrations completed"
+}
+finally {
+    Pop-Location
+}
+
 # Frontend setup
 $frontendJob = $null
 if (-not $NoFrontend) {

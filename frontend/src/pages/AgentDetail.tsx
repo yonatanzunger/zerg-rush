@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Play, Square, Archive, Trash2, Send, RefreshCw } from 'lucide-react'
+import { ArrowLeft, Play, Square, Archive, Trash2, Send, RefreshCw, ExternalLink, Terminal, Copy } from 'lucide-react'
 import { agents } from '../services/api'
 import Button from '../components/common/Button'
 import Card, { CardBody, CardHeader } from '../components/common/Card'
@@ -170,6 +170,51 @@ export default function AgentDetail() {
                 <dt className="text-sm text-gray-500">Gateway Port</dt>
                 <dd className="text-gray-900">{agent.gateway_port}</dd>
               </div>
+              {(agent.cloud_console_url || agent.ssh_url || agent.ssh_command) && (
+                <div>
+                  <dt className="text-sm text-gray-500">Cloud Resources</dt>
+                  <dd className="flex flex-col gap-2 mt-1">
+                    {agent.cloud_console_url && (
+                      <a
+                        href={agent.cloud_console_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-primary-600 hover:text-primary-700"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                        View in {agent.cloud_provider.toUpperCase()} Console
+                      </a>
+                    )}
+                    {agent.ssh_url && (
+                      <a
+                        href={agent.ssh_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-primary-600 hover:text-primary-700"
+                      >
+                        <Terminal className="h-4 w-4" />
+                        Open SSH Terminal
+                      </a>
+                    )}
+                    {agent.ssh_command && (
+                      <div className="flex items-center gap-2">
+                        <code className="text-sm bg-gray-100 px-2 py-1 rounded font-mono">
+                          {agent.ssh_command}
+                        </code>
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(agent.ssh_command!)
+                          }}
+                          className="p-1 text-gray-500 hover:text-gray-700"
+                          title="Copy to clipboard"
+                        >
+                          <Copy className="h-4 w-4" />
+                        </button>
+                      </div>
+                    )}
+                  </dd>
+                </div>
+              )}
               <div>
                 <dt className="text-sm text-gray-500">Created</dt>
                 <dd className="text-gray-900">

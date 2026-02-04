@@ -1,5 +1,7 @@
 # Zerg Rush Development Guidelines
 
+Whenever making architectural changes, design decisions, or implementing new features, please refer to the following documentation to ensure alignment with the project's goals and standards.
+
 See `.clarity-protocol/metadata.json` for basic metadata about this project.
 See `.clarity-protocol/problem.md` for detailed information about the problem this project is intended to solve. This should guide your overall approach to design and implementation.
 See `.clarity-protocol/solution/user-perspective.md` for detailed information about the intended user experience and user interface design. This should guide your frontend design and implementation decisions.

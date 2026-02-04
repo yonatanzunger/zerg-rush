@@ -85,7 +85,27 @@ async def run_async_migrations() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
-    asyncio.run(run_async_migrations())
+    # Check if there's already a running event loop (e.g., during FastAPI startup)
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None:
+        # We're inside an existing event loop - run sync migrations instead
+        # Convert async URL to sync URL for psycopg2
+        from sqlalchemy import create_engine
+
+        sync_url = get_url().replace("+asyncpg", "").replace("+aiosqlite", "")
+        connectable = create_engine(sync_url, poolclass=pool.NullPool)
+
+        with connectable.connect() as connection:
+            do_run_migrations(connection)
+
+        connectable.dispose()
+    else:
+        # No event loop running - safe to use asyncio.run()
+        asyncio.run(run_async_migrations())
 
 
 if context.is_offline_mode():

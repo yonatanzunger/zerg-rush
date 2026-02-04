@@ -54,6 +54,9 @@ class AgentResponse(BaseModel):
     vm_size: str
     vm_status: str
     vm_internal_ip: str | None
+    vm_external_ip: str | None
+    vm_zone: str | None
+    cloud_provider: str
     bucket_id: str
     current_task: str | None
     platform_type: str
@@ -62,9 +65,101 @@ class AgentResponse(BaseModel):
     gateway_port: int
     created_at: datetime
     updated_at: datetime
+    # Computed fields for UI links
+    cloud_console_url: str | None = None
+    ssh_url: str | None = None
+    ssh_command: str | None = None
 
     class Config:
         from_attributes = True
+
+
+def _get_vm_name(agent_id: str) -> str:
+    """Reconstruct VM name from agent ID."""
+    return f"zr-agent-{agent_id[:8]}"
+
+
+def _compute_cloud_urls(agent: "ActiveAgent") -> dict[str, str | None]:
+    """Compute cloud console and SSH URLs for an agent."""
+    cloud_console_url = None
+    ssh_url = None
+    ssh_command = None
+
+    vm_name = _get_vm_name(agent.id)
+
+    if agent.cloud_provider == "gcp":
+        project_id = settings.gcp_project_id
+        if project_id and agent.vm_zone:
+            if settings.gcp_compute_type == "cloudrun":
+                # Cloud Run service URL
+                region = settings.gcp_region
+                cloud_console_url = (
+                    f"https://console.cloud.google.com/run/detail/{region}/{vm_name}"
+                    f"?project={project_id}"
+                )
+                # No SSH for Cloud Run
+            else:
+                # GCE instance URL
+                cloud_console_url = (
+                    f"https://console.cloud.google.com/compute/instancesDetail"
+                    f"/zones/{agent.vm_zone}/instances/{vm_name}?project={project_id}"
+                )
+                # GCE web SSH URL
+                ssh_url = (
+                    f"https://console.cloud.google.com/compute/instancesDetail"
+                    f"/zones/{agent.vm_zone}/instances/{vm_name}"
+                    f"?project={project_id}&authuser=0#sshWeb"
+                )
+    elif agent.cloud_provider == "azure":
+        subscription_id = settings.azure_subscription_id
+        resource_group = settings.azure_resource_group
+        tenant_id = settings.azure_tenant_id
+        if subscription_id and resource_group:
+            # Azure Portal URL for container instance
+            cloud_console_url = (
+                f"https://portal.azure.com/#@{tenant_id}/resource"
+                f"/subscriptions/{subscription_id}"
+                f"/resourceGroups/{resource_group}"
+                f"/providers/Microsoft.ContainerInstance/containerGroups/{agent.vm_id}"
+            )
+            # Azure CLI command for exec into container
+            ssh_command = (
+                f"az container exec --resource-group {resource_group} "
+                f"--name {agent.vm_id} --exec-command /bin/bash"
+            )
+
+    return {
+        "cloud_console_url": cloud_console_url,
+        "ssh_url": ssh_url,
+        "ssh_command": ssh_command,
+    }
+
+
+def _agent_to_response(agent: "ActiveAgent") -> AgentResponse:
+    """Convert an ActiveAgent to AgentResponse with computed URLs."""
+    urls = _compute_cloud_urls(agent)
+    return AgentResponse(
+        id=agent.id,
+        name=agent.name,
+        vm_id=agent.vm_id,
+        vm_size=agent.vm_size,
+        vm_status=agent.vm_status,
+        vm_internal_ip=agent.vm_internal_ip,
+        vm_external_ip=agent.vm_external_ip,
+        vm_zone=agent.vm_zone,
+        cloud_provider=agent.cloud_provider,
+        bucket_id=agent.bucket_id,
+        current_task=agent.current_task,
+        platform_type=agent.platform_type,
+        platform_version=agent.platform_version,
+        template_id=agent.template_id,
+        gateway_port=agent.gateway_port,
+        created_at=agent.created_at,
+        updated_at=agent.updated_at,
+        cloud_console_url=urls["cloud_console_url"],
+        ssh_url=urls["ssh_url"],
+        ssh_command=urls["ssh_command"],
+    )
 
 
 class AgentListResponse(BaseModel):
@@ -112,7 +207,7 @@ async def list_agents(
     agents = result.scalars().all()
 
     return AgentListResponse(
-        agents=[AgentResponse.model_validate(a) for a in agents],
+        agents=[_agent_to_response(a) for a in agents],
         total=total,
     )
 
@@ -125,7 +220,7 @@ async def create_agent(
     providers: UserCloudProviders,
     body: CreateAgentRequest,
     session: TraceSession,
-) -> ActiveAgent:
+) -> AgentResponse:
     """Create a new agent."""
     session.set_user(current_user)
     session.log("Creating agent", name=body.name, platform_type=body.platform_type)
@@ -220,6 +315,9 @@ async def create_agent(
         vm_size=vm_size,
         vm_status=vm_instance.status.value,
         vm_internal_ip=vm_instance.internal_ip,
+        vm_external_ip=vm_instance.external_ip,
+        vm_zone=vm_instance.zone,
+        cloud_provider=settings.cloud_provider,
         bucket_id=bucket_id,
         platform_type=body.platform_type,
         template_id=body.template_id,
@@ -253,7 +351,7 @@ async def create_agent(
     await db.commit()
     await db.refresh(agent)
 
-    return agent
+    return _agent_to_response(agent)
 
 
 @router.get("/{agent_id}", response_model=AgentResponse)
@@ -261,7 +359,7 @@ async def get_agent(
     current_user: CurrentUser,
     db: DbSession,
     agent_id: str,
-) -> ActiveAgent:
+) -> AgentResponse:
     """Get a specific agent by ID."""
     result = await db.execute(
         select(ActiveAgent).where(
@@ -277,7 +375,7 @@ async def get_agent(
             detail="Agent not found",
         )
 
-    return agent
+    return _agent_to_response(agent)
 
 
 @router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -348,7 +446,7 @@ async def start_agent(
     providers: UserCloudProviders,
     agent_id: str,
     session: TraceSession,
-) -> ActiveAgent:
+) -> AgentResponse:
     """Start a stopped agent."""
     session.set_user(current_user)
     session.log("Starting agent", agent_id=agent_id)
@@ -380,6 +478,7 @@ async def start_agent(
             vm_instance = await providers.vm.get_vm_status(agent.vm_id, session=session)
             agent.vm_status = vm_instance.status.value
             agent.vm_internal_ip = vm_instance.internal_ip
+            agent.vm_external_ip = vm_instance.external_ip
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -400,7 +499,7 @@ async def start_agent(
     await db.refresh(agent)
     session.log("Agent started", agent_id=agent_id, status=agent.vm_status)
 
-    return agent
+    return _agent_to_response(agent)
 
 
 @router.post("/{agent_id}/stop", response_model=AgentResponse)
@@ -411,7 +510,7 @@ async def stop_agent(
     providers: UserCloudProviders,
     agent_id: str,
     session: TraceSession,
-) -> ActiveAgent:
+) -> AgentResponse:
     """Stop a running agent."""
     session.set_user(current_user)
     session.log("Stopping agent", agent_id=agent_id)
@@ -462,7 +561,7 @@ async def stop_agent(
     await db.refresh(agent)
     session.log("Agent stopped", agent_id=agent_id, status=agent.vm_status)
 
-    return agent
+    return _agent_to_response(agent)
 
 
 @router.get("/{agent_id}/status", response_model=AgentResponse)
@@ -471,7 +570,7 @@ async def get_agent_status(
     db: DbSession,
     providers: UserCloudProviders,
     agent_id: str,
-) -> ActiveAgent:
+) -> AgentResponse:
     """Get the current status of an agent (refreshes from cloud)."""
 
     result = await db.execute(
@@ -493,6 +592,7 @@ async def get_agent_status(
         vm_instance = await providers.vm.get_vm_status(agent.vm_id)
         agent.vm_status = vm_instance.status.value
         agent.vm_internal_ip = vm_instance.internal_ip
+        agent.vm_external_ip = vm_instance.external_ip
         await db.commit()
         await db.refresh(agent)
     except Exception as e:
@@ -500,7 +600,7 @@ async def get_agent_status(
         agent.vm_status = VMStatus.ERROR.value
         await db.commit()
 
-    return agent
+    return _agent_to_response(agent)
 
 
 @router.post("/{agent_id}/archive", status_code=status.HTTP_201_CREATED)
@@ -768,6 +868,9 @@ async def create_agent_streaming(
                         vm_size=vm_size,
                         vm_status=vm_instance.status.value,
                         vm_internal_ip=vm_instance.internal_ip,
+                        vm_external_ip=vm_instance.external_ip,
+                        vm_zone=vm_instance.zone,
+                        cloud_provider=settings.cloud_provider,
                         bucket_id=bucket_id,
                         platform_type=body.platform_type,
                         template_id=body.template_id,
@@ -803,24 +906,31 @@ async def create_agent_streaming(
                     session.log("Agent record saved")
 
                 # Emit completion event with agent data
+                agent_response = _agent_to_response(agent)
                 session.emit_completion(
                     message="Agent created successfully",
                     data={
                         "agent": {
-                            "id": agent.id,
-                            "name": agent.name,
-                            "vm_id": agent.vm_id,
-                            "vm_size": agent.vm_size,
-                            "vm_status": agent.vm_status,
-                            "vm_internal_ip": agent.vm_internal_ip,
-                            "bucket_id": agent.bucket_id,
-                            "current_task": agent.current_task,
-                            "platform_type": agent.platform_type,
-                            "platform_version": agent.platform_version,
-                            "template_id": agent.template_id,
-                            "gateway_port": agent.gateway_port,
+                            "id": agent_response.id,
+                            "name": agent_response.name,
+                            "vm_id": agent_response.vm_id,
+                            "vm_size": agent_response.vm_size,
+                            "vm_status": agent_response.vm_status,
+                            "vm_internal_ip": agent_response.vm_internal_ip,
+                            "vm_external_ip": agent_response.vm_external_ip,
+                            "vm_zone": agent_response.vm_zone,
+                            "cloud_provider": agent_response.cloud_provider,
+                            "bucket_id": agent_response.bucket_id,
+                            "current_task": agent_response.current_task,
+                            "platform_type": agent_response.platform_type,
+                            "platform_version": agent_response.platform_version,
+                            "template_id": agent_response.template_id,
+                            "gateway_port": agent_response.gateway_port,
                             "created_at": agent.created_at.isoformat(),
                             "updated_at": agent.updated_at.isoformat(),
+                            "cloud_console_url": agent_response.cloud_console_url,
+                            "ssh_url": agent_response.ssh_url,
+                            "ssh_command": agent_response.ssh_command,
                         }
                     },
                 )
@@ -978,6 +1088,7 @@ async def start_agent_streaming(
                     vm_instance = await providers.vm.get_vm_status(agent.vm_id, session=session)
                     agent.vm_status = vm_instance.status.value
                     agent.vm_internal_ip = vm_instance.internal_ip
+                    agent.vm_external_ip = vm_instance.external_ip
                     session.log("VM started", status=agent.vm_status)
 
                 await log_action(
@@ -992,24 +1103,31 @@ async def start_agent_streaming(
                 await db.commit()
                 await db.refresh(agent)
 
+                agent_response = _agent_to_response(agent)
                 session.emit_completion(
                     message="Agent started successfully",
                     data={
                         "agent": {
-                            "id": agent.id,
-                            "name": agent.name,
-                            "vm_id": agent.vm_id,
-                            "vm_size": agent.vm_size,
-                            "vm_status": agent.vm_status,
-                            "vm_internal_ip": agent.vm_internal_ip,
-                            "bucket_id": agent.bucket_id,
-                            "current_task": agent.current_task,
-                            "platform_type": agent.platform_type,
-                            "platform_version": agent.platform_version,
-                            "template_id": agent.template_id,
-                            "gateway_port": agent.gateway_port,
+                            "id": agent_response.id,
+                            "name": agent_response.name,
+                            "vm_id": agent_response.vm_id,
+                            "vm_size": agent_response.vm_size,
+                            "vm_status": agent_response.vm_status,
+                            "vm_internal_ip": agent_response.vm_internal_ip,
+                            "vm_external_ip": agent_response.vm_external_ip,
+                            "vm_zone": agent_response.vm_zone,
+                            "cloud_provider": agent_response.cloud_provider,
+                            "bucket_id": agent_response.bucket_id,
+                            "current_task": agent_response.current_task,
+                            "platform_type": agent_response.platform_type,
+                            "platform_version": agent_response.platform_version,
+                            "template_id": agent_response.template_id,
+                            "gateway_port": agent_response.gateway_port,
                             "created_at": agent.created_at.isoformat(),
                             "updated_at": agent.updated_at.isoformat(),
+                            "cloud_console_url": agent_response.cloud_console_url,
+                            "ssh_url": agent_response.ssh_url,
+                            "ssh_command": agent_response.ssh_command,
                         }
                     },
                 )
@@ -1085,24 +1203,31 @@ async def stop_agent_streaming(
                 await db.commit()
                 await db.refresh(agent)
 
+                agent_response = _agent_to_response(agent)
                 session.emit_completion(
                     message="Agent stopped successfully",
                     data={
                         "agent": {
-                            "id": agent.id,
-                            "name": agent.name,
-                            "vm_id": agent.vm_id,
-                            "vm_size": agent.vm_size,
-                            "vm_status": agent.vm_status,
-                            "vm_internal_ip": agent.vm_internal_ip,
-                            "bucket_id": agent.bucket_id,
-                            "current_task": agent.current_task,
-                            "platform_type": agent.platform_type,
-                            "platform_version": agent.platform_version,
-                            "template_id": agent.template_id,
-                            "gateway_port": agent.gateway_port,
+                            "id": agent_response.id,
+                            "name": agent_response.name,
+                            "vm_id": agent_response.vm_id,
+                            "vm_size": agent_response.vm_size,
+                            "vm_status": agent_response.vm_status,
+                            "vm_internal_ip": agent_response.vm_internal_ip,
+                            "vm_external_ip": agent_response.vm_external_ip,
+                            "vm_zone": agent_response.vm_zone,
+                            "cloud_provider": agent_response.cloud_provider,
+                            "bucket_id": agent_response.bucket_id,
+                            "current_task": agent_response.current_task,
+                            "platform_type": agent_response.platform_type,
+                            "platform_version": agent_response.platform_version,
+                            "template_id": agent_response.template_id,
+                            "gateway_port": agent_response.gateway_port,
                             "created_at": agent.created_at.isoformat(),
                             "updated_at": agent.updated_at.isoformat(),
+                            "cloud_console_url": agent_response.cloud_console_url,
+                            "ssh_url": agent_response.ssh_url,
+                            "ssh_command": agent_response.ssh_command,
                         }
                     },
                 )

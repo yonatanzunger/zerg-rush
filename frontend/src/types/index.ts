@@ -14,6 +14,9 @@ export interface Agent {
   vm_size: string
   vm_status: AgentStatus
   vm_internal_ip: string | null
+  vm_external_ip: string | null
+  vm_zone: string | null
+  cloud_provider: string
   bucket_id: string
   current_task: string | null
   platform_type: string
@@ -22,6 +25,10 @@ export interface Agent {
   gateway_port: number
   created_at: string
   updated_at: string
+  // Computed fields for cloud resource links
+  cloud_console_url: string | null
+  ssh_url: string | null
+  ssh_command: string | null
 }
 
 export type AgentStatus =
