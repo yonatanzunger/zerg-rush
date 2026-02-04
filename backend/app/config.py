@@ -34,12 +34,16 @@ class Settings(BaseSettings):
     gcp_project_id: str | None = None
     gcp_region: str = "us-central1"
     gcp_zone: str = "us-central1-a"
-    gcp_compute_type: Literal["cloudrun", "gce"] = "cloudrun"  # cloudrun (containers) or gce (VMs)
-    gcp_agent_network: str = "agent-network"  # For GCE VMs
-    gcp_agent_subnet: str = "agent-subnet"  # For GCE VMs
+    gcp_compute_type: Literal["cloudrun", "gce"] = (
+        "cloudrun"  # cloudrun (containers) or gce (VMs)
+    )
+    gcp_agent_network: str = "default"  # For GCE VMs; "default" or a custom VPC
+    gcp_agent_subnet: str = "default"  # For GCE VMs; "default" or a custom subnet
 
     # Cloud Run specific settings
-    gcp_vpc_connector: str | None = None  # e.g., "projects/PROJECT/locations/REGION/connectors/CONNECTOR"
+    gcp_vpc_connector: str | None = (
+        None  # e.g., "projects/PROJECT/locations/REGION/connectors/CONNECTOR"
+    )
     agent_container_image: str | None = None  # Custom agent container image
 
     # Azure-specific settings
@@ -58,7 +62,9 @@ class Settings(BaseSettings):
     # OAuth (Azure AD/Entra ID)
     azure_client_id: str | None = None
     azure_client_secret: str | None = None
-    azure_tenant_id: str = "common"  # Use "common" for multi-tenant or specific tenant ID
+    azure_tenant_id: str = (
+        "common"  # Use "common" for multi-tenant or specific tenant ID
+    )
 
     # OAuth (Google)
     google_client_id: str | None = None

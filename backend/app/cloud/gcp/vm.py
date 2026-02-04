@@ -99,13 +99,20 @@ class GCPVMProvider(VMProvider):
             disk.initialize_params = initialize_params
             instance.disks = [disk]
 
-            # Network interface (internal only, no external IP)
+            # Network interface
             network_interface = compute_v1.NetworkInterface()
-            network_interface.network = (
-                f"projects/{self.project_id}/global/networks/{self.network}"
-            )
-            network_interface.subnetwork = f"projects/{self.project_id}/regions/{self.zone.rsplit('-', 1)[0]}/subnetworks/{self.subnet}"
-            # No access_configs means no external IP
+            network_interface.access_configs = [
+                compute_v1.AccessConfig(
+                    type_=compute_v1.AccessConfig.Type.ONE_TO_ONE_NAT,
+                    network_tier=compute_v1.AccessConfig.NetworkTier.PREMIUM,
+                )
+            ]
+            if self.network != "default":
+                network_interface.network = (
+                    f"projects/{self.project_id}/global/networks/{self.network}"
+                )
+                if self.subnet != "default":
+                    network_interface.subnetwork = f"projects/{self.project_id}/regions/{self.zone.rsplit('-', 1)[0]}/subnetworks/{self.subnet}"
             instance.network_interfaces = [network_interface]
 
             # Labels
