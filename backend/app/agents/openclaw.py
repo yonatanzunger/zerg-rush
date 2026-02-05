@@ -59,11 +59,6 @@ apt-get install -y curl python3 python3-pip
 # Install Python cryptography for bundle decryption
 pip3 install cryptography --break-system-packages || pip3 install cryptography
 
-# Install Node.js 22
-echo "Installing Node.js 22..."
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-apt-get install -y nodejs
-
 # Create user if not exists
 echo "Setting up user: {username}..."
 useradd -m -s /bin/bash {username} 2>/dev/null || true
@@ -73,23 +68,14 @@ sudo -u {username} bash << 'USERSCRIPT'
 set -e
 cd ~
 
-echo "Setting up OpenClaw for user $USER..."
-
-# Install pnpm
-echo "Installing pnpm..."
-curl -fsSL https://get.pnpm.io/install.sh | sh -
-export PNPM_HOME="$HOME/.local/share/pnpm"
-export PATH="$PNPM_HOME:$PATH"
-
 # Create OpenClaw directories
 mkdir -p ~/.openclaw/credentials
 mkdir -p ~/.openclaw/workspace
 
 {bundle_section}
 
-# Install OpenClaw
-echo "Installing OpenClaw{version_arg}..."
-npm install -g openclaw{version_arg}
+echo "Setting up OpenClaw for user $USER..."
+curl -fsSL https://openclaw.bot/install.sh | bash -s -- --no-onboard
 
 # Run onboarding with daemon installation
 echo "Running OpenClaw onboarding..."
