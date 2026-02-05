@@ -113,6 +113,22 @@ class GCPStorageProvider(StorageProvider):
             )
             await asyncio.to_thread(new_bucket.patch)
 
+            # Grant the signing service account read access to the bucket
+            # This is required for signed URLs to work - the service account
+            # that signs the URL must have permission to access the objects
+            if self._service_account_email:
+                trace.log(
+                    "Granting storage access to signing service account...",
+                    service_account=self._service_account_email,
+                )
+                policy = await asyncio.to_thread(new_bucket.get_iam_policy)
+                policy.bindings.append({
+                    "role": "roles/storage.objectViewer",
+                    "members": [f"serviceAccount:{self._service_account_email}"],
+                })
+                await asyncio.to_thread(new_bucket.set_iam_policy, policy)
+                trace.log("IAM policy updated")
+
             trace.log("GCS bucket created successfully", bucket_name=bucket_name)
 
             return bucket_name

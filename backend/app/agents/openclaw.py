@@ -31,7 +31,9 @@ class OpenClawPlatform(AgentPlatform):
         Returns:
             Bash startup script that installs and configures OpenClaw.
         """
-        gateway_port = config.gateway_port if config else self.get_default_gateway_port()
+        gateway_port = (
+            config.gateway_port if config else self.get_default_gateway_port()
+        )
         username = self._username_from_email(user.email)
 
         # Build the bundle download section if credentials are provided
@@ -163,31 +165,80 @@ echo "=== OpenClaw startup complete at $(date) ==="
         Returns:
             Bash script section for bundle extraction
         """
-        return f'''
+        return f"""
 # Download and decrypt startup bundle
 echo "Downloading credential bundle..."
 BUNDLE_URL="{bundle_url}"
 
-curl -s -o /tmp/startup-bundle.enc "$BUNDLE_URL"
+# Download with error checking (show HTTP status code)
+HTTP_CODE=$(curl -s -w "%{{http_code}}" -o /tmp/startup-bundle.enc "$BUNDLE_URL")
+CURL_EXIT=$?
 
-if [ -f /tmp/startup-bundle.enc ]; then
-    echo "Decrypting and extracting bundle..."
-    python3 << 'DECRYPT_SCRIPT'
+echo "curl exit code: $CURL_EXIT, HTTP status: $HTTP_CODE"
+
+if [ $CURL_EXIT -ne 0 ]; then
+    echo "ERROR: curl failed with exit code $CURL_EXIT"
+    exit 1
+fi
+
+if [ "$HTTP_CODE" != "200" ]; then
+    echo "ERROR: HTTP request failed with status $HTTP_CODE"
+    echo "Response content (first 500 bytes):"
+    head -c 500 /tmp/startup-bundle.enc
+    exit 1
+fi
+
+if [ ! -f /tmp/startup-bundle.enc ]; then
+    echo "ERROR: Bundle file was not created"
+    exit 1
+fi
+
+BUNDLE_SIZE=$(stat -c%s /tmp/startup-bundle.enc 2>/dev/null || stat -f%z /tmp/startup-bundle.enc)
+echo "Downloaded bundle size: $BUNDLE_SIZE bytes"
+
+if [ "$BUNDLE_SIZE" -lt 50 ]; then
+    echo "ERROR: Bundle file is too small ($BUNDLE_SIZE bytes), likely an error response"
+    echo "Content:"
+    cat /tmp/startup-bundle.enc
+    exit 1
+fi
+
+echo "Decrypting and extracting bundle..."
+python3 << 'DECRYPT_SCRIPT'
 import base64
 import json
 import os
+import sys
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 # Read encrypted data
 with open('/tmp/startup-bundle.enc', 'rb') as f:
     encrypted_data = f.read()
 
+print(f"Read {{len(encrypted_data)}} bytes of encrypted data")
+
+# Validate minimum size (12 byte nonce + at least some ciphertext)
+if len(encrypted_data) < 28:
+    print(f"ERROR: Encrypted data too small ({{len(encrypted_data)}} bytes)")
+    print(f"First 100 bytes (hex): {{encrypted_data[:100].hex()}}")
+    print(f"First 100 bytes (text): {{encrypted_data[:100]}}")
+    sys.exit(1)
+
 # Decrypt
-key = base64.b64decode("{decryption_key}")
-nonce = encrypted_data[:12]
-ciphertext = encrypted_data[12:]
-aesgcm = AESGCM(key)
-plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+try:
+    key = base64.b64decode("{decryption_key}")
+    print(f"Decryption key length: {{len(key)}} bytes")
+    nonce = encrypted_data[:12]
+    ciphertext = encrypted_data[12:]
+    print(f"Nonce (hex): {{nonce.hex()}}")
+    print(f"Ciphertext length: {{len(ciphertext)}} bytes")
+    aesgcm = AESGCM(key)
+    plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+    print(f"Decryption successful, {{len(plaintext)}} bytes")
+except Exception as e:
+    print(f"ERROR: Decryption failed: {{e}}")
+    print(f"First 50 bytes of encrypted data (hex): {{encrypted_data[:50].hex()}}")
+    sys.exit(1)
 
 # Parse bundle
 bundle = json.loads(plaintext)
@@ -202,7 +253,7 @@ print('Written openclaw.json')
 env_lines = []
 for name, value in bundle.get('env_vars', {{}}).items():
     # Escape for shell
-    escaped = value.replace("'", "'\"'\"'")
+    escaped = value.replace("'", "'\\\"'\\\"'")
     env_lines.append(f"export {{name}}='{{escaped}}'")
 
 with open(os.path.expanduser('~/.openclaw/.env'), 'w') as f:
@@ -221,19 +272,22 @@ for channel, creds_b64 in bundle.get('channel_credentials', {{}}).items():
 print('Bundle extracted successfully')
 DECRYPT_SCRIPT
 
-    # Clean up
-    rm -f /tmp/startup-bundle.enc
-
-    # Source env vars for current session
-    if [ -f ~/.openclaw/.env ]; then
-        source ~/.openclaw/.env
-    fi
-
-    echo "Credential bundle processed successfully"
-else
-    echo "Warning: Could not download credential bundle"
+DECRYPT_EXIT=$?
+if [ $DECRYPT_EXIT -ne 0 ]; then
+    echo "ERROR: Decryption script failed"
+    exit 1
 fi
-'''
+
+# Clean up
+rm -f /tmp/startup-bundle.enc
+
+# Source env vars for current session
+if [ -f ~/.openclaw/.env ]; then
+    source ~/.openclaw/.env
+fi
+
+echo "Credential bundle processed successfully"
+"""
 
     def get_health_check_command(self) -> str | None:
         """Check if OpenClaw setup is complete."""
